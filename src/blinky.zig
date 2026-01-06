@@ -19,11 +19,15 @@ const pin_config = hal.pins.GlobalConfiguration{
 };
 const pins = pin_config.pins();
 
+const log = std.log.scoped(.main);
+
 pub fn main() !void {
     pin_config.apply();
     // init uart logging
     uart.apply(.{ .clock_config = hal.clock_config });
     hal.uart.init_logger(uart);
+
+    log.debug("started", .{});
 
     const led = pins.led;
     while (true) {
@@ -41,7 +45,7 @@ fn check_reboot() void {
         return;
     } orelse return;
     if (v == MAGICREBOOTCODE) {
-        std.log.warn("Reboot cmd received", .{});
+        log.warn("reboot cmd received", .{});
         hal.rom.reset_to_usb_boot();
     }
 }

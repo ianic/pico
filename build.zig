@@ -14,9 +14,8 @@ pub fn build(b: *std.Build) void {
         .name = "blinky",
         .target = mb.ports.rp2xxx.boards.raspberrypi.pico2_arm,
         .optimize = optimize,
-        .root_source_file = b.path("src/main.zig"),
+        .root_source_file = b.path("src/blinky.zig"),
     });
 
     mb.install_firmware(firmware, .{});
-    //mb.install_firmware(firmware, .{ .format = .elf });
 }
