@@ -6,7 +6,7 @@
     //
     // It is redundant to include "zig" in this name because it is already
     // within the Zig package namespace.
-    .name = .microzig_lwip,
+    .name = .microzig_pico_2w,
     // This is a [Semantic Version](https://semver.org/).
     // In a future version of Zig it will be used for package deduplication.
     .version = "0.0.0",
@@ -22,7 +22,7 @@
     // original project's identity. Thus it is recommended to leave the comment
     // on the following line intact, so that it shows up in code reviews that
     // modify the field.
-    .fingerprint = 0x37835f8012435b3, // Changing this has security and trust implications.
+    .fingerprint = 0x27e0d39b1de28872, // Changing this has security and trust implications.
     // Tracks the earliest Zig version that the package considers to be a
     // supported use case.
     .minimum_zig_version = "0.15.2",
@@ -32,6 +32,9 @@
     // Once all dependencies are fetched, `zig build` no longer requires
     // internet connectivity.
     .dependencies = .{
+        .microzig = .{
+            .path = "../../microzig/",
+        },
         // See `zig fetch --save <url>` for a command-line interface for adding dependencies.
         //.example = .{
         //    // When updating this field to a new URL, be sure to delete the corresponding
