@@ -5,7 +5,7 @@ zig build -Doptimize=ReleaseSafe
 
 # send uart reboot command
 printf '\xAB' | sudo tio -b 115200 /dev/ttyACM0
-sleep 0.5
+sleep 1
 
 app=${1:-blinky}
 picotool load -x -f zig-out/firmware/"$app".uf2
