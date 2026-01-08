@@ -1,19 +1,18 @@
 const std = @import("std");
 const microzig = @import("microzig");
-
 const hal = microzig.hal;
-const gpio = hal.gpio;
-const time = hal.time;
 const uart = hal.uart.instance.num(0);
-const drivers = hal.drivers;
+const timer = hal.system_timer.num(0);
+const loop = @import("loop.zig");
 
-pub const microzig_options = microzig.Options{
+// logging
+pub const microzig_options: microzig.Options = .{
     .log_level = .debug,
     .logFn = hal.uart.log,
 };
 const log = std.log.scoped(.main);
 
-// Compile-time pin configuration
+// pin configuration
 const pin_config = hal.pins.GlobalConfiguration{
     .GPIO0 = .{ .function = .UART0_TX },
     .GPIO1 = .{ .function = .UART0_RX },
@@ -24,33 +23,27 @@ const pins = pin_config.pins();
 
 pub fn main() !void {
     pin_config.apply();
-    // Init uart logging
+    // init uart logging
     uart.apply(.{ .clock_config = hal.clock_config });
     hal.uart.init_logger(uart);
 
-    // Init cyw43 chip
-    var wifi_driver: drivers.WiFi = .{};
+    // init cyw43 chip
+    var wifi_driver: hal.drivers.WiFi = .{};
     var wifi = try wifi_driver.init(.{});
     var led = wifi.gpio(0); // on-board led
     led.toggle();
 
+    // main loop
+    var blink_interval: loop.Interval = .init(200);
+    var reset_interval: loop.Interval = .init(100);
     while (true) {
-        pins.led.toggle();
-        led.toggle();
-        time.sleep_ms(500);
-        check_reboot();
-    }
-}
-
-// Puts pico in bootsel mode by uart command.
-fn check_reboot() void {
-    const MAGICREBOOTCODE: u8 = 0xAB;
-    const v = uart.read_word() catch {
-        uart.clear_errors();
-        return;
-    } orelse return;
-    if (v == MAGICREBOOTCODE) {
-        log.warn("reboot cmd received", .{});
-        hal.rom.reset_to_usb_boot();
+        const now = timer.read_low();
+        if (blink_interval.is_reached_by(now)) {
+            pins.led.toggle();
+            led.toggle();
+        }
+        if (reset_interval.is_reached_by(now)) {
+            loop.check_reset(uart);
+        }
     }
 }
