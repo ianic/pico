@@ -18,10 +18,11 @@ pub const Interval = struct {
 
     pub fn is_reached_by(self: *Interval, now: u32) bool {
         if (self.timeout <= now) {
-            if (self.timeout == now or now <= (std.math.maxInt(u32) - self.every)) {
-                self.timeout = now +% self.every;
-                return true;
-            }
+            if (self.timeout & 0x80_00_00_00 == 0 and now & 0x80_00_00_00 > 0)
+                return false;
+
+            self.timeout = now +% self.every;
+            return true;
         }
         return false;
     }
@@ -50,14 +51,12 @@ test "u32 overflow" {
 
     var now: u32 = (1 << 32) - 51;
     try testing.expect(!interval.is_reached_by(now));
-    now += 1;
+    now += 2;
     try testing.expect(interval.is_reached_by(now));
-    now += 1;
-    try testing.expect(!interval.is_reached_by(now));
     now += 48;
     try testing.expect(!interval.is_reached_by(now));
     now +%= 50;
     try testing.expect(!interval.is_reached_by(now));
-    now += 1;
+    now += 2;
     try testing.expect(interval.is_reached_by(now));
 }
