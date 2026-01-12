@@ -4,6 +4,7 @@ const microzig = @import("microzig");
 const hal = microzig.hal;
 const uart = hal.uart.instance.num(0);
 const timer = hal.system_timer.num(0);
+const time = hal.time;
 
 const loop = @import("loop.zig");
 const secrets = @import("secrets.zig");
@@ -34,9 +35,22 @@ pub fn main() !void {
     var wifi_driver: hal.drivers.WiFi = .{};
     var wifi = try wifi_driver.init(.{});
     var led = wifi.gpio(0); // on-board led
-    led.toggle();
-    try wifi.join(secrets.ssid, secrets.pwd, secrets.join_opt);
-    led.toggle();
+
+    // var pool_interval: loop.Interval = .init(10);
+    var jp = try wifi.join_init(secrets.ssid, secrets.pwd, secrets.join_opt);
+
+    var ticks: u32 = 0;
+    while (true) {
+        if (ticks % 5 == 0) {
+            led.toggle();
+        }
+        try jp.poll();
+        if (jp.is_connected()) break;
+
+        time.sleep_ms(10);
+        ticks += 1;
+    }
+    led.put(0);
 
     // init lwip network interface
     var nic: net.Interface = .{ .link = .adapt(wifi.interface()) };
@@ -48,21 +62,22 @@ pub fn main() !void {
     try udp.bind(9999, on_recv);
 
     // main loop
-    var blink_interval: loop.Interval = .init(200);
-    var reset_interval: loop.Interval = .init(100);
+    led.put(1);
+    ticks = 0;
     while (true) {
-        const now = timer.read_low();
-        if (blink_interval.is_reached_by(now)) {
+        if (ticks % 200 == 0) {
             pins.led.toggle();
             led.toggle();
         }
-        if (reset_interval.is_reached_by(now)) {
+        if (ticks % 100 == 0) {
             loop.check_reset(uart);
         }
         // run lwip poller
         nic.poll() catch |err| {
             log.err("net pool {}", .{err});
         };
+        time.sleep_ms(1);
+        ticks +%= 1;
     }
 }
 
