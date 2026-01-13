@@ -60,3 +60,19 @@ test "u32 overflow" {
     now += 2;
     try testing.expect(interval.is_reached_by(now));
 }
+
+pub const Ticker = struct {
+    const Self = @This();
+
+    ticks: u32 = 0,
+    interval: u32 = 1,
+
+    pub fn next(self: *Self) void {
+        hal.time.sleep_ms(self.interval);
+        self.ticks +%= 1;
+    }
+
+    pub fn every(self: Self, tick_count: u32) bool {
+        return self.ticks % tick_count == 0;
+    }
+};

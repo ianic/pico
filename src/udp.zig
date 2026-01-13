@@ -4,7 +4,6 @@ const microzig = @import("microzig");
 const hal = microzig.hal;
 const uart = hal.uart.instance.num(0);
 const timer = hal.system_timer.num(0);
-const time = hal.time;
 
 const loop = @import("loop.zig");
 const secrets = @import("secrets.zig");
@@ -23,10 +22,9 @@ const pin_config = hal.pins.GlobalConfiguration{
     // external led connected to the gpio 15 pin
     .GPIO15 = .{ .name = "led", .direction = .out, .function = .SIO },
 };
-const pins = pin_config.pins();
 
 pub fn main() !void {
-    pin_config.apply();
+    const pins = pin_config.apply();
     // init uart logging
     uart.apply(.{ .clock_config = hal.clock_config });
     hal.uart.init_logger(uart);
@@ -39,16 +37,13 @@ pub fn main() !void {
     // var pool_interval: loop.Interval = .init(10);
     var jp = try wifi.join_init(secrets.ssid, secrets.pwd, secrets.join_opt);
 
-    var ticks: u32 = 0;
-    while (true) {
-        if (ticks % 5 == 0) {
+    var ticker: loop.Ticker = .{ .interval = 10 };
+    while (true) : (ticker.next()) {
+        if (ticker.every(5)) {
             led.toggle();
         }
         try jp.poll();
         if (jp.is_connected()) break;
-
-        time.sleep_ms(10);
-        ticks += 1;
     }
     led.put(0);
 
@@ -63,21 +58,18 @@ pub fn main() !void {
 
     // main loop
     led.put(1);
-    ticks = 0;
-    while (true) {
-        if (ticks % 200 == 0) {
+    ticker = .{};
+    while (true) : (ticker.next()) {
+        if (ticker.every(200)) {
             pins.led.toggle();
             led.toggle();
         }
-        if (ticks % 100 == 0) {
+        if (ticker.every(100)) {
             loop.check_reset(uart);
         }
-        // run lwip poller
         nic.poll() catch |err| {
             log.err("net pool {}", .{err});
         };
-        time.sleep_ms(1);
-        ticks +%= 1;
     }
 }
 

@@ -19,10 +19,9 @@ const pin_config = hal.pins.GlobalConfiguration{
     // external led connected to the gpio 15 pin
     .GPIO15 = .{ .name = "led", .direction = .out, .function = .SIO },
 };
-const pins = pin_config.pins();
 
 pub fn main() !void {
-    pin_config.apply();
+    const pins = pin_config.apply();
     // init uart logging
     uart.apply(.{ .clock_config = hal.clock_config });
     hal.uart.init_logger(uart);
@@ -34,16 +33,12 @@ pub fn main() !void {
     led.toggle();
 
     // main loop
-    var blink_interval: loop.Interval = .init(200);
-    var reset_interval: loop.Interval = .init(100);
-    while (true) {
-        const now = timer.read_low();
-        if (blink_interval.is_reached_by(now)) {
+    var ticker: loop.Ticker = .{ .interval = 100 };
+    while (true) : (ticker.next()) {
+        if (ticker.every(2)) {
             pins.led.toggle();
             led.toggle();
         }
-        if (reset_interval.is_reached_by(now)) {
-            loop.check_reset(uart);
-        }
+        loop.check_reset(uart);
     }
 }
