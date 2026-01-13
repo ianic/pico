@@ -33,12 +33,13 @@ pub fn main() !void {
     led.toggle();
 
     // main loop
-    var ticker: loop.Ticker = .{ .interval = 100 };
-    while (true) : (ticker.next()) {
-        if (ticker.every(2)) {
+    var ticks: u32 = 0;
+    while (true) : (ticks +%= 1) {
+        if (ticks % 2 == 0) {
             pins.led.toggle();
             led.toggle();
         }
         loop.check_reset(uart);
+        hal.time.sleep_ms(100);
     }
 }

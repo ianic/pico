@@ -34,16 +34,16 @@ pub fn main() !void {
     var wifi = try wifi_driver.init(.{});
     var led = wifi.gpio(0); // on-board led
 
-    // var pool_interval: loop.Interval = .init(10);
+    // wifi join loop
     var jp = try wifi.join_init(secrets.ssid, secrets.pwd, secrets.join_opt);
-
-    var ticker: loop.Ticker = .{ .interval = 10 };
-    while (true) : (ticker.next()) {
-        if (ticker.every(5)) {
+    var ticks: u32 = 0;
+    while (true) : (ticks +%= 1) {
+        if (ticks % 5 == 0) {
             led.toggle();
         }
         try jp.poll();
         if (jp.is_connected()) break;
+        hal.time.sleep_ms(10);
     }
     led.put(0);
 
@@ -58,18 +58,19 @@ pub fn main() !void {
 
     // main loop
     led.put(1);
-    ticker = .{};
-    while (true) : (ticker.next()) {
-        if (ticker.every(200)) {
+    ticks = 0;
+    while (true) : (ticks +%= 1) {
+        if (ticks % 200 == 0) {
             pins.led.toggle();
             led.toggle();
         }
-        if (ticker.every(100)) {
+        if (ticks % 100 == 0) {
             loop.check_reset(uart);
         }
         nic.poll() catch |err| {
             log.err("net pool {}", .{err});
         };
+        hal.time.sleep_ms(1);
     }
 }
 
