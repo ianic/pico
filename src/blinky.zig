@@ -32,6 +32,17 @@ pub fn main() !void {
     var led = wifi.gpio(0); // on-board led
     led.toggle();
 
+    var scan = try wifi.scan_poller();
+    while (try scan.poll()) {
+        if (scan.result()) |res| {
+            log.debug(
+                "ssid: {s:<20}, channel: {}, open: {:<5}, ap mac {x}",
+                .{ res.ssid, res.channel, res.security.open(), res.ap_mac },
+            );
+        }
+        hal.time.sleep_ms(10);
+    }
+
     // main loop
     var ticks: u32 = 0;
     while (true) : (ticks +%= 1) {

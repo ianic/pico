@@ -15,8 +15,13 @@ pub fn build(b: *std.Build) void {
     const net_dep = b.dependency("net", .{
         .target = b.resolveTargetQuery(target.zig_target),
         .optimize = optimize,
-        .lwip_mem_size = 32 * 1024,
-        .lwip_pbuf_pool_size = 32,
+        .mem_size = 32 * 1024,
+        .pbuf_pool_size = 32,
+        .mtu = 1500,
+        // Cyw43 driver requires 22 bytes of header and 4 bytes of footer.
+        // header + ethernet + mtu + footer = 22 + 14 + 1500 + 4 = 1540
+        .pbuf_length = 1540,
+        .pbuf_header_length = 22,
     });
     const net_mod = net_dep.module("net");
 
@@ -35,5 +40,6 @@ pub fn build(b: *std.Build) void {
             },
         });
         mb.install_firmware(firmware, .{});
+        mb.install_firmware(firmware, .{ .format = .elf });
     }
 }

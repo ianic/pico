@@ -4,7 +4,9 @@ const microzig = @import("microzig");
 const hal = microzig.hal;
 const uart = hal.uart.instance.num(0);
 const timer = hal.system_timer.num(0);
-
+comptime {
+    _ = @import("lwip_exports.zig");
+}
 const loop = @import("loop.zig");
 const secrets = @import("secrets.zig");
 
@@ -35,20 +37,18 @@ pub fn main() !void {
     var led = wifi.gpio(0); // on-board led
 
     // wifi join loop
-    var jp = try wifi.join_init(secrets.ssid, secrets.pwd, secrets.join_opt);
+    var join = try wifi.join_poller(secrets.ssid, secrets.pwd, secrets.join_opt);
     var ticks: u32 = 0;
-    while (true) : (ticks +%= 1) {
+    while (try join.poll()) : (ticks +%= 1) {
         if (ticks % 5 == 0) {
             led.toggle();
         }
-        try jp.poll();
-        if (jp.is_connected()) break;
         hal.time.sleep_ms(10);
     }
     led.put(0);
 
     // init lwip network interface
-    var nic: net.Interface = .{ .link = .adapt(wifi.interface()) };
+    var nic: net.Interface = .{ .link = wifi.link() };
     try nic.init(wifi.mac, .{});
 
     // udp init
@@ -59,6 +59,7 @@ pub fn main() !void {
     // main loop
     led.put(1);
     ticks = 0;
+    var join_state = wifi.join_state();
     while (true) : (ticks +%= 1) {
         if (ticks % 200 == 0) {
             pins.led.toggle();
@@ -70,6 +71,10 @@ pub fn main() !void {
         nic.poll() catch |err| {
             log.err("net pool {}", .{err});
         };
+        if (join_state != wifi.join_state()) {
+            join_state = wifi.join_state();
+            log.debug("join state changed {}", .{join_state});
+        }
         hal.time.sleep_ms(1);
     }
 }
