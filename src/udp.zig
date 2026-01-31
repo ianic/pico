@@ -37,7 +37,7 @@ pub fn main() !void {
     var led = wifi.gpio(0); // on-board led
 
     // wifi join loop
-    var join = try wifi.join_poller(secrets.ssid, secrets.pwd, secrets.join_opt);
+    var join = try wifi.join(secrets.ssid, secrets.pwd, secrets.join_opt);
     var ticks: u32 = 0;
     while (try join.poll()) : (ticks +%= 1) {
         if (ticks % 5 == 0) {

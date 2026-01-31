@@ -32,7 +32,7 @@ pub fn main() !void {
     var led = wifi.gpio(0); // on-board led
     led.toggle();
 
-    var scan = try wifi.scan_poller();
+    var scan = try wifi.scan();
     while (try scan.poll()) {
         if (scan.result()) |res| {
             log.debug(
