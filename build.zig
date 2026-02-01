@@ -28,6 +28,7 @@ pub fn build(b: *std.Build) void {
     const apps: []const []const u8 = &.{
         "blinky",
         "udp",
+        "pong",
     };
     inline for (apps) |app| {
         const firmware = mb.add_firmware(.{
