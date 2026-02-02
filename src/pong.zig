@@ -6,6 +6,7 @@ const gpio = hal.gpio;
 const pio = hal.pio;
 const drivers = hal.drivers;
 const loop = @import("loop.zig");
+const pfs = @import("pfs.zig");
 
 const uart = hal.uart.instance.num(0);
 const uart_tx_pin = gpio.num(0);
@@ -28,6 +29,8 @@ comptime {
 const net = @import("net");
 const secrets = @import("secrets.zig");
 
+const blob_addr = 0x1030_0000;
+
 pub fn main() !void {
     const pins = pin_config.apply();
     // init uart logging
@@ -38,9 +41,8 @@ pub fn main() !void {
     var wifi_driver: drivers.WiFi = .{};
     var wifi = try wifi_driver.init(.{
         .chip = .{
-            .firmware = fileFromAddr(0x103b_0000), // 7_95_61
-            //.firmware = fileFromAddr(0x1036_0000), // 7_95_88
-            .clm = fileFromAddr(0x1035_f000),
+            .firmware = pfs.fileFromBlob(blob_addr, 0),
+            .clm = pfs.fileFromBlob(blob_addr, 2),
         },
     });
     var led = wifi.gpio(0);
@@ -68,14 +70,4 @@ pub fn main() !void {
         }
         loop.check_reset(uart);
     }
-}
-
-fn bytesFromAddr(addr: usize, len: usize) []const u8 {
-    return @as([*]const u8, @ptrFromInt(addr))[0..len];
-}
-
-fn fileFromAddr(addr: usize) []const u8 {
-    const len: u32 = std.mem.readInt(u32, bytesFromAddr(addr, 4)[0..4], .little);
-    log.debug("loading file of {} bytes from {x}", .{ len, addr });
-    return bytesFromAddr(addr + 4, len);
 }

@@ -43,4 +43,25 @@ pub fn build(b: *std.Build) void {
         mb.install_firmware(firmware, .{});
         mb.install_firmware(firmware, .{ .format = .elf });
     }
+
+    { // generate and load blob
+        const generate = b.addExecutable(.{
+            .name = "pfs",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/pfs.zig"),
+                .target = b.graph.host,
+            }),
+        });
+        const tool_step = b.addRunArtifact(generate);
+        tool_step.addArg("--output-file");
+        const output = tool_step.addOutputFileArg("pfs.bin");
+
+        const load = b.addSystemCommand(&.{"picotool"});
+        load.addArgs(&.{ "load", "--offset", "0x10300000", "--verify" });
+        load.addFileArg(output);
+        load.step.dependOn(&b.addInstallFileWithDir(output, .prefix, "psf.bin").step);
+
+        const blob_step = b.step("blob", "Upload files blob to the pico");
+        blob_step.dependOn(&load.step);
+    }
 }
