@@ -8,6 +8,8 @@ const MicroBuild = microzig.MicroBuild(.{
 pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
+    const app_to_deploy = b.option([]const u8, "deploy", "App to deploy after build");
+
     const mz_dep = b.dependency("microzig", .{});
     const mb = MicroBuild.init(b, mz_dep) orelse return;
     const target = mb.ports.rp2xxx.boards.raspberrypi.pico2_arm;
@@ -41,7 +43,32 @@ pub fn build(b: *std.Build) void {
             },
         });
         mb.install_firmware(firmware, .{});
-        mb.install_firmware(firmware, .{ .format = .elf });
+        const install_elf = mb.add_install_firmware(firmware, .{ .format = .elf });
+
+        if (app_to_deploy) |name| {
+            if (std.mem.eql(u8, app, name)) {
+                const write_deploy_script = b.addWriteFile("deploy.sh", b.fmt(
+                    "#!/bin/bash                                                \n" ++
+                        "set -e                                                 \n" ++
+                        "elf={0s}.elf                                           \n" ++
+                        "bin={0s}.bin                                           \n" ++
+                        "cd zig-out/firmware                                    \n" ++
+                        "arm-none-eabi-objcopy -O binary $elf $bin              \n" ++
+                        "until picotool load --offset 0x10000000 -x -f $bin; do \n" ++
+                        "    sleep 1                                            \n" ++
+                        "done                                                   \n",
+                    .{name},
+                ));
+                const run_deploy_script = b.addSystemCommand(&[_][]const u8{
+                    "bash", //,"zig-out/deploy.sh",
+                });
+                run_deploy_script.addFileArg(
+                    write_deploy_script.getDirectory().join(b.allocator, "deploy.sh") catch @panic("OOM"),
+                );
+                run_deploy_script.step.dependOn(&install_elf.step);
+                mb.builder.getInstallStep().dependOn(&run_deploy_script.step);
+            }
+        }
     }
 
     { // generate and load blob
