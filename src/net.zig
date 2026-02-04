@@ -11,6 +11,9 @@ const log = std.log.scoped(.net);
 const broadcast_mac: Mac = .{ 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
 const broadcast_ip: Ip = .{ 0xff, 0xff, 0xff, 0xff };
 
+const arp_table_len = 8;
+const tx_link_header = 22;
+
 pub const Net = struct {
     const Self = @This();
 
@@ -21,47 +24,32 @@ pub const Net = struct {
     sleep_ms: *const fn (delay: u32) void,
     tx_buffer: []u8,
     rx_buffer: []u8,
+    arp_table: ArpTable(arp_table_len) = .{},
 
     fn ip_identification(self: *Self) u16 {
         self.identification +%= 1;
         return self.identification;
     }
 
-    pub fn poll(self: *Self, wait_ms: u32) !void {
-        var delay: u32 = 0;
-        while (delay < wait_ms) {
-            while (try self.recv()) |bytes| {
-                try self.handle(bytes);
+    pub fn poll(self: *Self) !void {
+        while (true) {
+            const rsp = try self.driver.vtable.recv(self.driver.ptr, self.rx_buffer);
+            if (rsp.len > 0) {
+                try self.handle(self.rx_buffer[rsp.head..][0..rsp.len]);
             }
-            self.sleep_ms(10);
-            delay += 10;
+            if (rsp.next_packet_available) |npa| if (!npa) break;
         }
     }
 
-    fn send(self: *Self, data: []const u8) Link.Error!void {
-        try self.driver.send(self.driver.ptr, data);
+    fn eth_tx_buffer(self: *Self) []u8 {
+        return self.tx_buffer[tx_link_header..];
     }
 
-    fn recv(self: *Self) !?[]const u8 {
-        const rsp = try self.driver.recv(self.driver.ptr, self.rx_buffer);
-        if (rsp.len > 0) return self.rx_buffer[rsp.head..][rsp.len];
-        // TODO handle rsp.next_packet_available
-        return null;
-    }
-
-    pub fn get_mac(self: *Self, ip: IpAddr) !Mac {
-        try self.poll(0);
-        for (0..10) |_| {
-            try self.send_arp_request(ip);
-            for (0..10) |_| {
-                while (try self.recv()) |bytes| {
-                    if (try parse_arp_response(bytes, ip)) |mac| return mac;
-                    try self.handle(bytes);
-                }
-                self.sleep_ms(10);
-            }
-        }
-        return error.Timeout;
+    fn send(self: *Self, pos: usize) Link.Error!void {
+        try self.driver.vtable.send(
+            self.driver.ptr,
+            self.tx_buffer[0 .. tx_link_header + pos],
+        );
     }
 
     pub fn send_arp_request(self: *Self, ip: IpAddr) !void {
@@ -77,23 +65,10 @@ pub const Net = struct {
             .target_mac = broadcast_mac,
             .target_ip = ip,
         };
-        var pos = try eth_rsp.encode(self.tx_buffer);
-        pos += try arp_rsp.encode(self.tx_buffer[pos..]);
-        try self.send(self.tx_buffer[0..pos]);
-    }
-
-    fn parse_arp_response(rx_bytes: []const u8, ip: IpAddr) !?Mac {
-        var bytes: []const u8 = rx_bytes;
-        const eth = try Ethernet.decode(bytes);
-        bytes = bytes[@sizeOf(Ethernet)..];
-        if (eth.protocol == .arp) {
-            const arp = try Arp.decode(bytes);
-            bytes = bytes[@sizeOf(Arp)..];
-            if (arp.opcode == .response and mem.eql(u8, &ip, &arp.sender_ip)) {
-                return arp.sender_mac;
-            }
-        }
-        return null;
+        var buf = self.eth_tx_buffer();
+        var pos = try eth_rsp.encode(buf);
+        pos += try arp_rsp.encode(buf[pos..]);
+        try self.send(pos);
     }
 
     fn handle(self: *Self, rx_bytes: []const u8) !void {
@@ -122,13 +97,15 @@ pub const Net = struct {
                     .target_mac = arp.sender_mac,
                     .target_ip = arp.sender_ip,
                 };
-                var pos = try eth_rsp.encode(self.tx_buffer);
-                pos += try arp_rsp.encode(self.tx_buffer[pos..]);
-                try self.send(self.tx_buffer[0..pos]);
+                const buf = self.eth_tx_buffer();
+                var pos = try eth_rsp.encode(buf);
+                pos += try arp_rsp.encode(buf[pos..]);
+                try self.send(pos);
                 return;
             }
 
             if (arp.opcode == .response) {
+                self.arp_table.push(arp.sender_ip, arp.sender_mac);
                 log.debug(
                     "arp response from ip: {any} mac: {x} arp: {}",
                     .{ arp.sender_ip[0..4], arp.sender_mac[0..6], arp },
@@ -138,17 +115,18 @@ pub const Net = struct {
         if (eth.protocol == .ip) {
             const ip = try Ip.decode(bytes);
             if (bytes.len < ip.total_length) return error.InsufficientBuffer;
-            if (ip.fragment.mf) return error.IpFragmented;
+            if (ip.fragment.mf or ip.fragment.offset > 0)
+                return error.IpFragmented;
 
             bytes = bytes[0..ip.total_length][@sizeOf(Ip)..];
             if (ip.protocol == .icmp and mem.eql(u8, &ip.destination, &self.ip)) {
                 const icmp = try Icmp.decode(bytes);
                 const data = bytes[@sizeOf(Icmp)..];
                 if (icmp.typ == .request) {
-                    log.debug(
-                        "ping request from ip: {any}, mac: {x}, data.len {}",
-                        .{ ip.source[0..4], eth.source[0..6], data.len },
-                    );
+                    // log.debug(
+                    //     "ping request from ip: {any}, mac: {x}, data.len {}",
+                    //     .{ ip.source[0..4], eth.source[0..6], data.len },
+                    // );
                     var eth_rsp: Ethernet = .{
                         .destination = eth.source,
                         .source = self.mac,
@@ -167,12 +145,13 @@ pub const Net = struct {
                         .identifier = icmp.identifier,
                         .sequence = icmp.sequence,
                     };
-                    var pos = try eth_rsp.encode(self.tx_buffer[0..]);
-                    pos += try ip_rsp.encode(self.tx_buffer[pos..]);
-                    pos += try icmp_rsp.encode(self.tx_buffer[pos..], data);
-                    @memcpy(self.tx_buffer[pos..][0..data.len], data);
+                    var buf = self.eth_tx_buffer();
+                    var pos = try eth_rsp.encode(buf);
+                    pos += try ip_rsp.encode(buf[pos..]);
+                    pos += try icmp_rsp.encode(buf[pos..], data);
+                    @memcpy(buf[pos..][0..data.len], data);
                     pos += data.len;
-                    try self.send(self.tx_buffer[0..pos]);
+                    try self.send(pos);
                     return;
                 }
             }
@@ -412,6 +391,35 @@ pub const UdpHeader = extern struct {
         return n;
     }
 };
+
+fn ArpTable(len: usize) type {
+    return struct {
+        const Self = @This();
+
+        const Entry = struct {
+            ip: IpAddr = @splat(0),
+            mac: Mac = @splat(0),
+        };
+
+        entries: [len]Entry = @splat(.{}),
+        next: usize = 0,
+
+        fn push(self: *Self, ip: IpAddr, mac: Mac) void {
+            self.entries[self.next] = .{ .ip = ip, .mac = mac };
+            self.next = (self.next + 1) % len;
+        }
+
+        fn pop(self: Self, ip: IpAddr) ?Entry {
+            const i: u32 = @bitCast(ip);
+            for (self.entries) |entry| {
+                const e: u32 = @bitCast(entry.ip);
+                if (e == 0) return null;
+                if (e == i) return entry;
+            }
+            return null;
+        }
+    };
+}
 
 comptime {
     assert(@sizeOf(Ethernet) == 14);
@@ -662,4 +670,19 @@ test "udp checksum" {
 
     const expected = hexToBytes("1234270f001c4cd3");
     try testing.expectEqualSlices(u8, &expected, buf[0..n]);
+}
+
+test "arp table" {
+    var at: ArpTable(4) = .{};
+
+    at.push(.{ 192, 168, 1, 10 }, .{ 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x00 });
+    at.push(.{ 192, 168, 1, 11 }, .{ 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x01 });
+    at.push(.{ 192, 168, 1, 12 }, .{ 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x02 });
+    try testing.expectEqual(0x01, at.pop(.{ 192, 168, 1, 11 }).?.mac[5]);
+    try testing.expectEqual(0x02, at.pop(.{ 192, 168, 1, 12 }).?.mac[5]);
+
+    at.push(.{ 192, 168, 1, 13 }, .{ 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x03 });
+    at.push(.{ 192, 168, 1, 14 }, .{ 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x04 });
+    try testing.expectEqual(0x04, at.pop(.{ 192, 168, 1, 14 }).?.mac[5]);
+    try testing.expectEqual(null, at.pop(.{ 192, 168, 1, 10 }));
 }

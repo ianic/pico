@@ -26,11 +26,13 @@ pub fn build(b: *std.Build) void {
         .pbuf_header_length = 22,
     });
     const net_mod = net_dep.module("net");
+    const link_mod = b.dependency("link", .{}).module("link");
 
     const apps: []const []const u8 = &.{
         "blinky",
         "udp",
         "pong",
+        "inet",
     };
     inline for (apps) |app| {
         const firmware = mb.add_firmware(.{
@@ -40,6 +42,7 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/" ++ app ++ ".zig"),
             .imports = &.{
                 .{ .name = "net", .module = net_mod },
+                .{ .name = "link", .module = link_mod },
             },
         });
         mb.install_firmware(firmware, .{});
@@ -54,6 +57,7 @@ pub fn build(b: *std.Build) void {
                         "bin={0s}.bin                                           \n" ++
                         "cd zig-out/firmware                                    \n" ++
                         "arm-none-eabi-objcopy -O binary $elf $bin              \n" ++
+                        "printf '\xAB' > /dev/ttyACM0 || true                   \n" ++
                         "until picotool load --offset 0x10000000 -x -f $bin; do \n" ++
                         "    sleep 1                                            \n" ++
                         "done                                                   \n",
@@ -90,5 +94,21 @@ pub fn build(b: *std.Build) void {
 
         const blob_step = b.step("blob", "Upload files blob to the pico");
         blob_step.dependOn(&load.step);
+    }
+
+    { // zig build test
+        const test_mod = b.createModule(.{
+            .root_source_file = b.path("src/root.zig"),
+            .target = b.graph.host,
+            .imports = &.{
+                .{ .name = "link", .module = link_mod },
+            },
+        });
+        const unit_tests = b.addTest(.{
+            .root_module = test_mod,
+        });
+        const run_unit_tests = b.addRunArtifact(unit_tests);
+        const test_step = b.step("test", "Run unit tests");
+        test_step.dependOn(&run_unit_tests.step);
     }
 }
