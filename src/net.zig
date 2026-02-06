@@ -30,7 +30,7 @@ pub const Net = struct {
         return self.identification;
     }
 
-    pub fn poll(self: *Self, now: u32) !void {
+    pub fn poll(self: *Self, now: u32) !u32 {
         while (true) {
             const rsp = try self.driver.vtable.recv(self.driver.ptr, self.rx_buffer);
             if (rsp.len > 0) {
@@ -44,6 +44,7 @@ pub const Net = struct {
         if (self.link_state == .up) {
             try self.dhcp_tick(now);
         }
+        return if (self.dhcp.state == .bound) 60_000 else 1_000;
     }
 
     fn dhcp_tick(self: *Self, now: u32) !void {

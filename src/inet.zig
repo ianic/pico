@@ -74,39 +74,37 @@ pub fn main() !void {
     // Join network
     _ = try wifi.join(secrets.ssid, secrets.pwd, secrets.join_opt);
 
-    // timer.schedule_alarm(.alarm0, timer.read_low() +% tick_interval_ms * 1000);
+    //
     while (true) {
+        //timer.clear_interrupt(.alarm0);
         const now: u32 = @truncate(time.get_time_since_boot().to_us() / 1000);
-        net.poll(now) catch |err| {
+        const interval = net.poll(now) catch |err| {
             log.err("net poll {}", .{err});
             // there can be more waiting packets
             // log error and poll again
             // TODO: fatal join error is also reported here and leads to infinite loop
             continue;
         };
+        timer.schedule_alarm(.alarm0, timer.read_low() +% interval * 1000);
+        while (!wakeup) {
+            cpu.wfe();
+        }
+        wakeup = false;
         led.toggle();
-
-        cpu.wfe();
     }
 }
 
-const tick_interval_ms = 250;
-
-var wakeup_source: packed struct {
-    wifi: bool = false,
-    tick: bool = false,
-} = .{};
+var wakeup: bool = false;
 
 fn gpio_interrupt() linksection(".ram_text") callconv(.c) void {
     // Disable interrupts storm, store source and wake up main loop.
     wifi_driver.disable_irq();
-    wakeup_source.wifi = true;
+    wakeup = true;
     cpu.sev();
 }
 
 fn timer_interrupt() linksection(".ram_text") callconv(.c) void {
-    wakeup_source.tick = true;
-    cpu.sev();
     timer.clear_interrupt(.alarm0);
-    timer.schedule_alarm(.alarm0, timer.read_low() +% tick_interval_ms * 1000);
+    wakeup = true;
+    cpu.sev();
 }
