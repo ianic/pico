@@ -65,33 +65,25 @@ pub fn main() !void {
     log.debug("mac address: {x}", .{wifi.mac});
 
     var net = Net{
-        .mac = wifi.mac,
-        .ip = .{ 192, 168, 207, 90 },
+        .dhcp = .init(wifi.mac),
         .driver = wifi.link(),
-        .sleep_ms = time.sleep_ms,
         .tx_buffer = &tx_buffer,
         .rx_buffer = &rx_buffer,
     };
 
     // Join network
     _ = try wifi.join(secrets.ssid, secrets.pwd, secrets.join_opt);
-    var join_state = wifi.join_state();
 
     // timer.schedule_alarm(.alarm0, timer.read_low() +% tick_interval_ms * 1000);
     while (true) {
-        net.poll() catch |err| {
+        const now: u32 = @truncate(time.get_time_since_boot().to_us() / 1000);
+        net.poll(now) catch |err| {
             log.err("net poll {}", .{err});
-            // TODO: ne moze ovo ovako ostati
-            wakeup_source.wifi = true;
+            // there can be more waiting packets
+            // log error and poll again
+            // TODO: fatal join error is also reported here and leads to infinite loop
             continue;
         };
-        if (join_state != wifi.join_state()) {
-            join_state = wifi.join_state();
-            log.debug("join_state: {}", .{join_state});
-            if (join_state == .joined) {
-                try net.send_arp_request(.{ 192, 168, 207, 181 });
-            }
-        }
         led.toggle();
 
         cpu.wfe();
