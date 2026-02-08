@@ -1,15 +1,15 @@
 const std = @import("std");
 const mem = std.mem;
-const assert = std.debug.assert;
-const testing = std.testing;
 const builtin = @import("builtin");
 const native_endian = builtin.cpu.arch.endian();
-const Link = @import("link");
-
 const log = std.log.scoped(.net);
 
-const broadcast_mac: Mac = .{ 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
-const broadcast_ip: IpAddr = .{ 0xff, 0xff, 0xff, 0xff };
+const assert = std.debug.assert;
+const testing = std.testing;
+const hexToBytes = @import("testu.zig").hexToBytes;
+
+const Link = @import("link");
+const Dhcp = @import("Dhcp.zig");
 
 const arp_table_len = 8;
 const tx_link_header = 22;
@@ -25,7 +25,7 @@ pub const Net = struct {
     dhcp: Dhcp,
     link_state: Link.RecvResponse.LinkState = .down,
 
-    fn ip_identification(self: *Self) u16 {
+    fn ipIdentification(self: *Self) u16 {
         self.identification +%= 1;
         return self.identification;
     }
@@ -42,35 +42,35 @@ pub const Net = struct {
             if (rsp.next_packet_available) |npa| if (!npa) break;
         }
         if (self.link_state == .up) {
-            try self.dhcp_tick(now);
+            try self.dhcpTx(now);
         }
         return if (self.dhcp.state == .bound) 60_000 else 1_000;
     }
 
-    fn dhcp_tick(self: *Self, now: u32) !void {
-        again: switch (self.dhcp.state) {
-            .initial, .offer => |current| {
-                if (self.dhcp.state == .initial) {
-                    self.dhcp.transaction_id = now;
-                }
-                const n = try self.dhcp.encode(self.eth_tx_buffer());
-                try self.send(n);
-                self.dhcp.set_state(if (current == .initial) .discover else .request, now);
-            },
-            // TODO timeout (1000ms) should be randomized and exponentially increasing
-            // rfc: https://datatracker.ietf.org/doc/html/rfc2131 page 23 (randomized exponential backoff algorithm)
-            .discover, .request => if (now -% self.dhcp.ts >= 1000) {
-                self.dhcp.set_state(.initial, now);
-                break :again;
-            },
-            .bound => if ((now -% self.dhcp.ts) / 1000 >= self.dhcp.args.lease_time) {
-                self.dhcp.set_state(.offer, now);
-                break :again;
-            },
+    fn dhcpTx(self: *Self, now: u32) !void {
+        const buffer = self.txBuffer();
+        const n = try self.dhcp.tx(buffer[Udp.header_len..], now);
+        if (n > 0) {
+            const dhcp_payload = buffer[Udp.header_len..][0..n];
+            var udp: Udp = .{
+                .ip_identification = self.ipIdentification(),
+                .source = .{
+                    .ip = @splat(0),
+                    .mac = self.dhcp.args.mac,
+                    .port = @intFromEnum(Ports.dhcp_client),
+                },
+                .destination = .{
+                    .ip = @splat(0xff),
+                    .mac = @splat(0xff),
+                    .port = @intFromEnum(Ports.dhcp_server),
+                },
+            };
+            try self.send(try udp.encode(buffer, dhcp_payload));
         }
     }
 
-    fn eth_tx_buffer(self: *Self) []u8 {
+    // tx buffer with headroom reserved for the link
+    fn txBuffer(self: *Self) []u8 {
         return self.tx_buffer[tx_link_header..];
     }
 
@@ -81,9 +81,9 @@ pub const Net = struct {
         );
     }
 
-    pub fn send_arp_request(self: *Self, ip: IpAddr) !void {
+    pub fn sendArpRequest(self: *Self, ip: Addr) !void {
         var eth_rsp: Ethernet = .{
-            .destination = broadcast_mac,
+            .destination = @splat(0xff),
             .source = self.mac,
             .protocol = .arp,
         };
@@ -91,10 +91,10 @@ pub const Net = struct {
             .opcode = .request,
             .sender_mac = self.mac,
             .sender_ip = self.ip,
-            .target_mac = broadcast_mac,
+            .target_mac = @splat(0xff),
             .target_ip = ip,
         };
-        var buf = self.eth_tx_buffer();
+        var buf = self.txBuffer();
         var pos = try eth_rsp.encode(buf);
         pos += try arp_rsp.encode(buf[pos..]);
         try self.send(pos);
@@ -129,7 +129,7 @@ pub const Net = struct {
                     .target_mac = arp.sender_mac,
                     .target_ip = arp.sender_ip,
                 };
-                const buf = self.eth_tx_buffer();
+                const buf = self.txBuffer();
                 var pos = try eth_rsp.encode(buf);
                 pos += try arp_rsp.encode(buf[pos..]);
                 try self.send(pos);
@@ -177,7 +177,7 @@ pub const Net = struct {
                         .identifier = icmp.identifier,
                         .sequence = icmp.sequence,
                     };
-                    var buf = self.eth_tx_buffer();
+                    var buf = self.txBuffer();
                     var pos = try eth_rsp.encode(buf);
                     pos += try ip_rsp.encode(buf[pos..]);
                     pos += try icmp_rsp.encode(buf[pos..], data);
@@ -196,17 +196,10 @@ pub const Net = struct {
                 if (udp.source_port == @intFromEnum(Ports.dhcp_server) and
                     udp.destination_port == @intFromEnum(Ports.dhcp_client))
                 {
-                    try self.dhcp.handle(bytes, now);
-                    try self.dhcp_tick(now);
+                    try self.dhcp.rx(bytes, now);
+                    try self.dhcpTx(now);
                 }
             }
-        }
-    }
-
-    pub fn send_dhcp_discover(self: *Self) !void {
-        if (self.dhcp.state == .initial) {
-            const n = try self.dhcp.encode(self.eth_tx_buffer());
-            try self.send(n);
         }
     }
 };
@@ -215,28 +208,17 @@ pub const Udp = struct {
     const Self = @This();
     ip_identification: u16,
     source: struct {
-        ip: IpAddr,
+        ip: Addr,
         mac: Mac,
         port: u16,
     },
     destination: struct {
-        ip: IpAddr,
+        ip: Addr,
         mac: Mac,
         port: u16,
     },
 
     const header_len = @sizeOf(Ethernet) + @sizeOf(Ip) + @sizeOf(UdpHeader);
-
-    // /// Buffer for the udp payload. Preserving space for the udp header at the
-    // /// start of the net.tx_buffer. If this is used for the payload then there
-    // /// is no need for memcpy in send.
-    // pub fn tx_buffer(self: *Self) []u8 {
-    //     return self.net.eth_tx_buffer()[header_len..];
-    // }
-
-    // pub fn send(self: *Self, payload: []const u8) !void {
-    //     try self.net.send(self.net.eth_tx_buffer(), self.encode(payload));
-    // }
 
     fn encode(self: *Self, buffer: []u8, payload: []const u8) !usize {
         var eth: Ethernet = .{
@@ -269,7 +251,7 @@ pub const Udp = struct {
 };
 
 const Mac = [6]u8;
-const IpAddr = [4]u8;
+const Addr = [4]u8;
 
 pub const Ethernet = extern struct {
     const Self = @This();
@@ -284,16 +266,16 @@ pub const Ethernet = extern struct {
     source: Mac,
     protocol: Protocol,
 
-    pub fn decode(bytes: []const u8) !Self {
+    fn decode(bytes: []const u8) !Self {
         return try decodeAny(Self, bytes, 0);
     }
 
-    pub fn encode(self: Self, bytes: []u8) !usize {
+    fn encode(self: Self, bytes: []u8) !usize {
         return try encodeAny(self, bytes);
     }
 };
 
-pub const Arp = extern struct {
+const Arp = extern struct {
     const Self = @This();
 
     const Hardware = enum(u16) {
@@ -321,20 +303,20 @@ pub const Arp = extern struct {
     protocol_size: u8 = 4,
     opcode: Opcode,
     sender_mac: Mac,
-    sender_ip: IpAddr,
+    sender_ip: Addr,
     target_mac: Mac,
-    target_ip: IpAddr,
+    target_ip: Addr,
 
-    pub fn decode(bytes: []const u8) !Self {
+    fn decode(bytes: []const u8) !Self {
         return try decodeAny(Self, bytes, 0);
     }
 
-    pub fn encode(self: Self, bytes: []u8) !usize {
+    fn encode(self: Self, bytes: []u8) !usize {
         return try encodeAny(self, bytes);
     }
 };
 
-pub const Ip = extern struct {
+const Ip = extern struct {
     const Self = @This();
 
     const Protocol = enum(u8) {
@@ -365,32 +347,32 @@ pub const Ip = extern struct {
     ttl: u8 = 64, // time to live
     protocol: Protocol, // type of data found in payload
     checksum: u16 = 0, // checksum of the this header only
-    source: IpAddr, // source ip address
-    destination: IpAddr, // destintaion ip address
+    source: Addr, // source ip address
+    destination: Addr, // destintaion ip address
 
-    pub fn decode(bytes: []const u8) !Self {
+    fn decode(bytes: []const u8) !Self {
         const header_length: u8 = (bytes[0] & 0x0f) * 4;
         if (bytes.len < header_length) return error.InsufficientBuffer;
         return try decodeAny(Self, bytes[0..header_length], header_length);
     }
 
-    pub fn encode(self: *Self, bytes: []u8) !usize {
+    fn encode(self: *Self, bytes: []u8) !usize {
         self.checksum = 0;
         const n = try encodeAny(self.*, bytes);
-        set_checksum(Self, "", bytes[0..n], "");
+        setChecksum(Self, "", bytes[0..n], "");
         return n;
     }
 
-    pub fn payload_length(self: Self) u16 {
+    fn payloadLength(self: Self) u16 {
         return self.total_length - @as(u16, self.header.length) * 4;
     }
 
-    pub fn options_length(self: Self) u16 {
+    fn optionsLength(self: Self) u16 {
         return @as(u16, self.header.length) * 4 - @sizeOf(Ip);
     }
 };
 
-pub const Icmp = extern struct {
+const Icmp = extern struct {
     const Self = @This();
 
     const Type = enum(u8) {
@@ -406,19 +388,19 @@ pub const Icmp = extern struct {
     identifier: u16,
     sequence: u16,
 
-    pub fn decode(bytes: []const u8) !Self {
+    fn decode(bytes: []const u8) !Self {
         return try decodeAny(Self, bytes, bytes.len);
     }
 
-    pub fn encode(self: *Self, bytes: []u8, payload: []const u8) !usize {
+    fn encode(self: *Self, bytes: []u8, payload: []const u8) !usize {
         self.checksum = 0;
         const n = try encodeAny(self.*, bytes);
-        set_checksum(Self, "", bytes[0..n], payload);
+        setChecksum(Self, "", bytes[0..n], payload);
         return n;
     }
 };
 
-pub const UdpHeader = extern struct {
+const UdpHeader = extern struct {
     const Self = @This();
 
     source_port: u16,
@@ -427,14 +409,14 @@ pub const UdpHeader = extern struct {
     checksum: u16 = 0,
 
     const PseudoHeader = extern struct {
-        source: IpAddr,
-        destination: IpAddr,
+        source: Addr,
+        destination: Addr,
         _: u8 = 0,
         protocol: Ip.Protocol,
         length: u16,
     };
 
-    pub fn encode(self: *Self, bytes: []u8, ip: *Ip, payload: []const u8) !usize {
+    fn encode(self: *Self, bytes: []u8, ip: *Ip, payload: []const u8) !usize {
         self.checksum = 0;
         var pseudo_header: PseudoHeader = .{
             .source = ip.source,
@@ -446,11 +428,11 @@ pub const UdpHeader = extern struct {
             std.mem.byteSwapAllFields(PseudoHeader, &pseudo_header);
         }
         const n = try encodeAny(self.*, bytes);
-        set_checksum(Self, mem.asBytes(&pseudo_header), bytes[0..n], payload);
+        setChecksum(Self, mem.asBytes(&pseudo_header), bytes[0..n], payload);
         return n;
     }
 
-    pub fn decode(bytes: []const u8) !Self {
+    fn decode(bytes: []const u8) !Self {
         return try decodeAny(Self, bytes, 0);
     }
 };
@@ -460,19 +442,19 @@ fn ArpTable(len: usize) type {
         const Self = @This();
 
         const Entry = struct {
-            ip: IpAddr = @splat(0),
+            ip: Addr = @splat(0),
             mac: Mac = @splat(0),
         };
 
         entries: [len]Entry = @splat(.{}),
         next: usize = 0,
 
-        fn push(self: *Self, ip: IpAddr, mac: Mac) void {
+        fn push(self: *Self, ip: Addr, mac: Mac) void {
             self.entries[self.next] = .{ .ip = ip, .mac = mac };
             self.next = (self.next + 1) % len;
         }
 
-        fn pop(self: Self, ip: IpAddr) ?Entry {
+        fn pop(self: Self, ip: Addr) ?Entry {
             const i: u32 = @bitCast(ip);
             for (self.entries) |entry| {
                 const e: u32 = @bitCast(entry.ip);
@@ -492,10 +474,9 @@ comptime {
     assert(@sizeOf(UdpHeader) == 8);
 }
 
-// c_len number of bytes for checksum calculation
-fn decodeAny(T: type, bytes: []const u8, c_len: usize) !T {
-    if (c_len > 0) {
-        if (0xffff ^ checksum(0, bytes[0..c_len]) != 0) return error.Checksum;
+pub fn decodeAny(T: type, bytes: []const u8, checksum_len: usize) !T {
+    if (checksum_len > 0) { // number of bytes for checksum calculation
+        if (0xffff ^ checksum(0, bytes[0..checksum_len]) != 0) return error.Checksum;
     }
     if (bytes.len < @sizeOf(T)) return error.InsufficientBuffer;
 
@@ -506,7 +487,7 @@ fn decodeAny(T: type, bytes: []const u8, c_len: usize) !T {
     return t;
 }
 
-fn set_checksum(T: type, pseudo_header: []const u8, header: []u8, payload: []const u8) void {
+fn setChecksum(T: type, pseudo_header: []const u8, header: []u8, payload: []const u8) void {
     var sum: u16 = 0;
     if (pseudo_header.len > 0) {
         sum = checksum(sum, pseudo_header);
@@ -546,6 +527,13 @@ pub fn encodeAny(t: anytype, bytes: []u8) !usize {
     return @sizeOf(T);
 }
 
+pub fn writeAny(w: *std.Io.Writer, any: anytype) !void {
+    const T = @TypeOf(any);
+    const n = @sizeOf(T);
+    const bytes = try w.writableSlice(n);
+    assert(try encodeAny(any, bytes) == n);
+}
+
 test "arp request" {
     const data = hexToBytes("5847ca75fdbc1ae829c3ec78080600010800060400011ae829c3ec78c0a8be01000000000000c0a8beeb000000000000000000000000000000000000");
 
@@ -567,7 +555,7 @@ test "arp request" {
     try testing.expectEqualSlices(u8, &[_]u8{ 192, 168, 190, 235 }, &arp.target_ip);
     {
         const local_mac = .{ 0x58, 0x47, 0xca, 0x75, 0xfd, 0xbc };
-        const local_ip: IpAddr = .{ 192, 168, 190, 235 };
+        const local_ip: Addr = .{ 192, 168, 190, 235 };
         var eth_rsp: Ethernet = .{
             .destination = arp.sender_mac,
             .source = local_mac,
@@ -692,12 +680,6 @@ test "decode whole icmp packet" {
     try testing.expectEqualSlices(u8, &net_bytes, buffer[0..pos]);
 }
 
-pub fn hexToBytes(comptime hex: []const u8) [hex.len / 2]u8 {
-    var res: [hex.len / 2]u8 = undefined;
-    _ = std.fmt.hexToBytes(&res, hex) catch unreachable;
-    return res;
-}
-
 test "ip with options" {
     var bytes: []const u8 = &hexToBytes("01005e0000fb1ae829c3ec78080046c00020f3d700000102d09ac0a8be01e00000fb9404000011640da0e00000fb");
 
@@ -708,8 +690,8 @@ test "ip with options" {
     try testing.expectEqual(.ip, eth.protocol);
     try testing.expectEqual(6, ip.header.length); // 24 bytes header instead of default 20
     try testing.expectEqual(32, ip.total_length);
-    try testing.expectEqual(4, ip.options_length());
-    try testing.expectEqual(8, ip.payload_length());
+    try testing.expectEqual(4, ip.optionsLength());
+    try testing.expectEqual(8, ip.payloadLength());
     try testing.expectEqual(.igmp, ip.protocol);
 }
 
@@ -750,310 +732,8 @@ test "arp table" {
     try testing.expectEqual(null, at.pop(.{ 192, 168, 1, 10 }));
 }
 
-test "create dhcp discover" {
-    const expected: []const u8 = &hexToBytes("010106000000000000008000000000000000000000000000000000002ccf67f3b7ea0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000063825363350101390205dc370401031c06ff");
-
-    var dhcp: Dhcp = .init(.{ 0x2c, 0xcf, 0x67, 0xf3, 0xb7, 0xea });
-
-    var buffer: [1500]u8 = undefined;
-    const n = try dhcp.encodePayload(&buffer);
-    try testing.expectEqualSlices(u8, expected, buffer[0..n]);
-}
-
-test "parse dhcp offer" {
-    const bytes: []const u8 = &hexToBytes("02010600000000000000800000000000c0a8cfaac0a8cf01000000002ccf67f3b7ea00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000638253633501023604c0a8cf01330400000e103a04000007083b0400000c4e0104ffffff001c04c0a8cfff1a0205dc0304c0a8cf010604c0a8cf01ff00000000");
-    var dhcp: Dhcp = .init(.{ 0x2c, 0xcf, 0x67, 0xf3, 0xb7, 0xea });
-    dhcp.state = .discover;
-
-    try dhcp.handle(bytes, 0);
-    try testing.expectEqual(.offer, dhcp.state);
-    try testing.expectEqualSlices(u8, &.{ 192, 168, 207, 170 }, &dhcp.args.addr);
-    try testing.expectEqualSlices(u8, &.{ 255, 255, 255, 0 }, &dhcp.args.subnet_mask);
-    try testing.expectEqualSlices(u8, &.{ 192, 168, 207, 255 }, &dhcp.args.broadcast_addr);
-    try testing.expectEqualSlices(u8, &.{ 192, 168, 207, 1 }, &dhcp.args.dhcp_server);
-    try testing.expectEqualSlices(u8, &.{ 192, 168, 207, 1 }, &dhcp.args.dns_server);
-    try testing.expectEqualSlices(u8, &.{ 192, 168, 207, 1 }, &dhcp.args.gateway);
-    try testing.expectEqual(3600, dhcp.args.lease_time);
-    try testing.expectEqual(1800, dhcp.args.renewal_time);
-    try testing.expectEqual(3150, dhcp.args.rebinding_time);
-    try testing.expectEqual(1500, dhcp.args.mtu);
-}
-
-test "create dhcp request" {
-    const expected: []const u8 = &hexToBytes("010106000000000000008000000000000000000000000000000000002ccf67f3b7ea00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000638253633501033604c0a8be013204c0a8bece390205dc370401031c06ff");
-
-    var dhcp: Dhcp = .init(.{ 0x2c, 0xcf, 0x67, 0xf3, 0xb7, 0xea });
-    dhcp.state = .offer;
-    dhcp.args.addr = .{ 192, 168, 190, 206 };
-    dhcp.args.dhcp_server = .{ 192, 168, 190, 1 };
-
-    var buffer: [1500]u8 = undefined;
-    const n = try dhcp.encodePayload(&buffer);
-    try testing.expectEqualSlices(u8, expected, buffer[0..n]);
-}
-
-test "parse dhcp ack" {
-    const bytes: []const u8 = &hexToBytes("02010600000000000000800000000000c0a8becec0a8be01000000002ccf67f3b7ea00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000638253633501053604c0a8be0133040000a8c03a04000054603b04000093a80104ffffff001c04c0a8beff1a0205dc0304c0a8be010604c0a8be01ff00000000");
-    var dhcp: Dhcp = .init(.{ 0x2c, 0xcf, 0x67, 0xf3, 0xb7, 0xea });
-    dhcp.state = .request;
-
-    try dhcp.handle(bytes, 0);
-    try testing.expectEqual(.bound, dhcp.state);
-    try testing.expectEqualSlices(u8, &.{ 192, 168, 190, 206 }, &dhcp.args.addr);
-    try testing.expectEqualSlices(u8, &.{ 255, 255, 255, 0 }, &dhcp.args.subnet_mask);
-    try testing.expectEqualSlices(u8, &.{ 192, 168, 190, 255 }, &dhcp.args.broadcast_addr);
-    try testing.expectEqualSlices(u8, &.{ 192, 168, 190, 1 }, &dhcp.args.dhcp_server);
-    try testing.expectEqualSlices(u8, &.{ 192, 168, 190, 1 }, &dhcp.args.dns_server);
-    try testing.expectEqualSlices(u8, &.{ 192, 168, 190, 1 }, &dhcp.args.gateway);
-    try testing.expectEqual(43200, dhcp.args.lease_time);
-    try testing.expectEqual(21600, dhcp.args.renewal_time);
-    try testing.expectEqual(37800, dhcp.args.rebinding_time);
-    try testing.expectEqual(1500, dhcp.args.mtu);
-}
-
-fn asIpAddr(bytes: []const u8) !IpAddr {
-    if (bytes.len < 4) return error.InsufficientBuffer;
-    return bytes[0..4].*;
-}
-
-fn asInt(T: type, bytes: []const u8) !T {
-    const l = @divExact(@typeInfo(T).int.bits, 8);
-    if (bytes.len < l) return error.InsufficientBuffer;
-    return mem.readInt(T, bytes[0..l], .big);
-}
-
 const Ports = enum(u16) {
     dhcp_server = 67,
     dhcp_client = 68,
     _,
-};
-
-const Dhcp = struct {
-    const Self = @This();
-
-    state: State = .initial,
-    ts: u32 = 0, // timestamp of the last state change
-    transaction_id: u32 = 0,
-    args: Args,
-
-    const Args = struct {
-        mac: Mac,
-
-        addr: IpAddr = @splat(0),
-        subnet_mask: IpAddr = @splat(0),
-        broadcast_addr: IpAddr = broadcast_ip,
-
-        gateway: IpAddr = @splat(0),
-        dns_server: IpAddr = @splat(0),
-        dhcp_server: IpAddr = @splat(0),
-
-        lease_time: u32 = 0, // release when expires
-        renewal_time: u32 = 0, // renew from the same server
-        rebinding_time: u32 = 0, // renew from any server
-
-        mtu: u16 = 0,
-    };
-
-    const State = enum {
-        initial,
-        discover, // discover massage is sent
-        offer, // offer is recived
-        request, // request message is sent
-        bound, // server acknowledged request
-    };
-
-    const Boot = extern struct {
-        op: u8 = 1, // operation request = 1, reply = 2
-        htype: u8 = 1, // hardware type, ethernet = 1
-        heln: u8 = 6, // number of bytes in chaddr
-        hops: u8 = 0,
-        xid: u32 = 0, // transaction id
-        secs: u16 = 0,
-        flags: [2]u8 = .{ 0x80, 0x00 }, // broadcast flag set
-        ciaddr: [4]u8 = @splat(0),
-        yiaddr: [4]u8 = @splat(0), // your ip address
-        siaddr: [4]u8 = @splat(0),
-        giaddr: [4]u8 = @splat(0),
-        chaddr: [16]u8 = @splat(0), // client hardware address
-        _: [64 + 128]u8 = @splat(0),
-
-        pub fn decode(bytes: []const u8) !Boot {
-            return try decodeAny(Boot, bytes, 0);
-        }
-    };
-
-    pub fn init(mac: Mac) Dhcp {
-        return .{ .args = .{ .mac = mac } };
-    }
-
-    pub fn set_state(self: *Self, new_state: State, now: u32) void {
-        if (self.state == new_state) return;
-        log.debug("dhcp state {s:<8} => {s:<8} ts: {}", .{ @tagName(self.state), @tagName(new_state), now });
-        self.state = new_state;
-        self.ts = now;
-    }
-
-    fn encodePayload(self: *Self, buffer: []u8) !usize {
-        var w = std.Io.Writer.fixed(buffer);
-        var boot: Boot = .{ .xid = self.transaction_id };
-        if (native_endian == .little) {
-            std.mem.byteSwapAllFields(Boot, &boot);
-        }
-        @memcpy(boot.chaddr[0..6], &self.args.mac);
-        try w.writeAll(mem.asBytes(&boot));
-        try w.writeAll(&magic_cookie);
-        // message type header
-        try w.writeAll(&.{ 0x35, 0x01 });
-        if (self.state == .offer) {
-            try w.writeByte(@intFromEnum(MessageType.request));
-
-            try w.writeByte(@intFromEnum(Options.dhcp_server));
-            try w.writeByte(4);
-            try w.writeAll(&self.args.dhcp_server);
-
-            try w.writeByte(@intFromEnum(Options.requested_ip));
-            try w.writeByte(4);
-            try w.writeAll(&self.args.addr);
-        } else {
-            try w.writeByte(@intFromEnum(MessageType.discover));
-        }
-        // max message size 1500
-        try w.writeAll(&.{ 0x39, 0x02, 0x05, 0xdc });
-        // parameter request list
-        try w.writeAll(&.{ 0x37, 0x04, 0x01, 0x03, 0x1c, 0x06 });
-        // end
-        try w.writeAll(&.{0xff});
-        return w.end;
-    }
-
-    pub fn encode(self: *Self, buffer: []u8) !usize {
-        const n = try self.encodePayload(buffer[Udp.header_len..]);
-        var udp: Udp = .{
-            .ip_identification = 0,
-            .source = .{
-                .ip = @splat(0),
-                .mac = self.args.mac,
-                .port = @intFromEnum(Ports.dhcp_client),
-            },
-            .destination = .{
-                .ip = broadcast_ip,
-                .mac = broadcast_mac,
-                .port = @intFromEnum(Ports.dhcp_server),
-            },
-        };
-        return try udp.encode(buffer, buffer[Udp.header_len..][0..n]);
-    }
-
-    fn handle(self: *Self, payload: []const u8, now: u32) !void {
-        var bytes: []const u8 = payload;
-
-        // parse boot
-        const boot = try Dhcp.Boot.decode(bytes);
-        bytes = bytes[@sizeOf(Boot)..];
-        if (boot.op != 2 or !mem.eql(u8, boot.chaddr[0..self.args.mac.len], &self.args.mac)) {
-            return; // not response or not for me
-        }
-        if (boot.xid != self.transaction_id) {
-            log.debug("dhcp wrong transaction id {} expected {}", .{ boot.xid, self.transaction_id });
-            return;
-        }
-        if (bytes.len < 4 and !mem.eql(u8, bytes[0..4], &magic_cookie)) {
-            return; // invalid
-        }
-
-        bytes = bytes[4..];
-
-        // parse options
-        var args: Args = .{ .addr = boot.yiaddr, .mac = self.args.mac };
-        var message_type: ?MessageType = null;
-        var r = std.Io.Reader.fixed(bytes);
-        while (r.seek < r.end) {
-            const option = try r.takeEnum(Options, .little);
-            if (option == .pad) continue;
-            if (option == .end) break;
-            const val = try r.take(try r.takeByte());
-            switch (option) {
-                .message_type => {
-                    if (val.len != 1) return error.InsufficientBuffer;
-                    message_type = @enumFromInt(val[0]);
-                },
-                .subnet_mask => args.subnet_mask = try asIpAddr(val),
-                .broadcast_addr => args.broadcast_addr = try asIpAddr(val),
-                .gateway => args.gateway = try asIpAddr(val),
-                .dns_server => args.dns_server = try asIpAddr(val),
-                .dhcp_server => args.dhcp_server = try asIpAddr(val),
-                .lease_time => args.lease_time = try asInt(u32, val),
-                .renewal_time => args.renewal_time = try asInt(u32, val),
-                .rebinding_time => args.rebinding_time = try asInt(u32, val),
-                .mtu => args.mtu = try asInt(u16, val),
-                else => {
-                    log.debug("unhandled dhcp option {} {x}\n", .{ option, val });
-                },
-            }
-        }
-        if (message_type == null) return;
-
-        // ref: https://datatracker.ietf.org/doc/html/rfc2131#autoid-12
-        // for states illustrated:251
-        switch (self.state) {
-            else => {},
-            .discover => {
-                if (message_type.? == .offer) {
-                    self.args = args;
-                    self.set_state(.offer, now);
-                }
-            },
-            .request => {
-                if (message_type.? == .ack) {
-                    self.args = args;
-                    self.set_state(.bound, now);
-                }
-                if (message_type.? == .nak) {
-                    self.set_state(.initial, now);
-                }
-            },
-        }
-    }
-
-    const magic_cookie: [4]u8 = .{ 0x63, 0x82, 0x53, 0x63 };
-
-    // https://www.iana.org/assignments/bootp-dhcp-parameters/bootp-dhcp-parameters.xhtml
-    const Options = enum(u8) {
-        pad = 0,
-
-        subnet_mask = 1,
-        gateway = 3,
-        dns_server = 6,
-        domain_name = 15,
-        mtu = 26,
-        broadcast_addr = 28,
-        requested_ip = 50,
-        lease_time = 51,
-        message_type = 53,
-        dhcp_server = 54,
-
-        client_id = 61, // my mac
-
-        // in dhcp discover, request
-        parameter_request_list = 55,
-        max_dhcp_message_size = 57,
-        renewal_time = 58,
-        rebinding_time = 59,
-
-        end = 0xff,
-        _,
-    };
-
-    // ref: https://datatracker.ietf.org/doc/html/rfc2132#section-9.6
-    const MessageType = enum(u8) {
-        discover = 1,
-        offer = 2,
-        request = 3,
-        decline = 4,
-        ack = 5,
-        nak = 6,
-        release = 7,
-        inform = 8,
-        _,
-    };
 };
