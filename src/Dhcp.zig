@@ -76,7 +76,7 @@ pub fn init(mac: Mac) Dhcp {
 pub fn tx(self: *Dhcp, tx_bytes: []u8, now: u32) !usize {
     again: switch (self.state) {
         .initial, .offer => |current| {
-            if (self.state == .initial) {
+            if (self.transaction_id == 0) {
                 self.transaction_id = now;
             }
             const n = try self.encode(tx_bytes);
@@ -99,9 +99,12 @@ pub fn tx(self: *Dhcp, tx_bytes: []u8, now: u32) !usize {
 
 fn setState(self: *Dhcp, new_state: State, now: u32) void {
     if (self.state == new_state) return;
-    log.debug("dhcp state {s:<8} => {s:<8} ts: {}", .{ @tagName(self.state), @tagName(new_state), now });
+    if (self.state == .bound or new_state == .initial) {
+        self.transaction_id = now;
+    }
     self.state = new_state;
     self.ts = now;
+    log.debug("dhcp state {s:<8} => {s:<8} ts: {}", .{ @tagName(self.state), @tagName(new_state), now });
 }
 
 fn encode(self: *Dhcp, buffer: []u8) !usize {
