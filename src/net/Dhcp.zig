@@ -86,12 +86,12 @@ pub fn tx(self: *Dhcp, tx_bytes: []u8, now: u32) !usize {
 
 fn setState(self: *Dhcp, new_state: State, now: u32) void {
     if (self.state == new_state) return;
-    if (self.state == .bound or new_state == .initial) {
+    if (self.state == .bound) {
         self.transaction_id = now;
     }
+    log.debug("dhcp state {s:<8} => {s:<8} transaction_id: {} now: {}", .{ @tagName(self.state), @tagName(new_state), self.transaction_id, now });
     self.state = new_state;
     self.ts = now;
-    log.debug("dhcp state {s:<8} => {s:<8} ts: {}", .{ @tagName(self.state), @tagName(new_state), now });
 }
 
 fn encode(self: *Dhcp, buffer: []u8) !usize {
@@ -143,6 +143,7 @@ pub fn rx(self: *Dhcp, rx_bytes: []const u8, now: u32) !void {
     const boot = try Dhcp.Boot.decode(bytes);
     bytes = bytes[@sizeOf(Boot)..];
     if (boot.op != 2 or !mem.eql(u8, boot.chaddr[0..self.ipc.mac.len], &self.ipc.mac)) {
+        log.debug("invalid boot op: {} chaddr: {x}", .{ boot.op, boot.chaddr });
         return; // not response or not for me
     }
     if (boot.xid != self.transaction_id) {

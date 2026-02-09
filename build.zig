@@ -98,7 +98,7 @@ pub fn build(b: *std.Build) void {
 
     { // zig build test
         const test_mod = b.createModule(.{
-            .root_source_file = b.path("src/root.zig"),
+            .root_source_file = b.path("src/net/root.zig"),
             .target = b.graph.host,
             .imports = &.{
                 .{ .name = "link", .module = link_mod },

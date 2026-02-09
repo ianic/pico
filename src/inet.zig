@@ -8,7 +8,7 @@ const pio = hal.pio;
 const drivers = hal.drivers;
 const loop = @import("loop.zig");
 const pfs = @import("pfs.zig");
-const Net = @import("net.zig").Net;
+const Net = @import("net/root.zig").Net;
 
 const uart = hal.uart.instance.num(0);
 const uart_tx_pin = gpio.num(0);
