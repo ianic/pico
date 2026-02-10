@@ -38,10 +38,11 @@ pub const Net = struct {
             }
             if (rsp.next_packet_available) |npa| if (!npa) break;
         }
-        if (self.link_state == .up) {
-            try self.dhcpTx(now);
-        }
-        return if (self.dhcp.state == .bound) 60_000 else 1_000;
+        if (self.link_state == .up)
+            if (self.dhcp.timer.expired(now))
+                try self.dhcpTx(now);
+
+        return self.dhcp.timer.expiresIn(now);
     }
 
     fn dhcpTx(self: *Self, now: u32) !void {
@@ -175,4 +176,52 @@ const Ports = enum(u16) {
 test {
     _ = @import("protocol.zig");
     _ = @import("Dhcp.zig");
+}
+
+pub const Timer = struct {
+    const Self = @This();
+
+    start: u32 = 0,
+    duration: u32 = 0,
+
+    pub fn expired(self: Self, now: u32) bool {
+        return (now -% self.start >= self.duration);
+    }
+
+    pub fn less(self: Self, other: Self) bool {
+        return (self.start +% self.duration) < (other.start +% other.duration);
+    }
+
+    pub fn expiresIn(self: Self, now: u32) u32 {
+        const diff = now -% self.start;
+        if (diff >= self.duration) return 0;
+        return self.duration - diff;
+    }
+};
+
+const testing = std.testing;
+
+test Timer {
+    const maxU32 = std.math.maxInt(u32);
+
+    const t: Timer = .{ .start = maxU32 - 100, .duration = 1000 };
+    try testing.expect(!t.expired(maxU32 - 100));
+    try testing.expect(!t.expired(maxU32 - 10));
+    try testing.expect(t.expired(maxU32 - 101));
+    try testing.expect(!t.expired(100));
+    try testing.expect(!t.expired(898));
+    try testing.expect(t.expired(899));
+
+    try testing.expectEqual(1000, t.expiresIn(maxU32 - 100));
+    try testing.expectEqual(910, t.expiresIn(maxU32 - 10));
+    try testing.expectEqual(890, t.expiresIn(9));
+    try testing.expectEqual(99, t.expiresIn(800));
+    try testing.expectEqual(0, t.expiresIn(900));
+
+    const t2: Timer = .{ .start = maxU32 - 200, .duration = 1300 };
+    try testing.expect(t.less(t2));
+    try testing.expect(!t2.less(t));
+
+    const t3: Timer = .{};
+    try testing.expect(t3.expired(1));
 }

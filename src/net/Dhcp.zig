@@ -7,17 +7,23 @@ const hexToBytes = @import("testu.zig").hexToBytes;
 const protocol = @import("protocol.zig");
 const Mac = protocol.Mac;
 const Addr = protocol.Addr;
+const Timer = @import("root.zig").Timer;
 
 const Dhcp = @This();
 
+const response_wait_ms = 1000;
+
 state: State = .initial,
-ts: u32 = 0, // timestamp of the last state change
 transaction_id: u32 = 0,
 
 ipc: protocol.IpConfig,
 opt: Options = .{},
+timer: Timer = .{},
+// TODO timeout (1000ms) should be randomized and exponentially increasing
+// rfc: https://datatracker.ietf.org/doc/html/rfc2131 page 23 (randomized exponential backoff algorithm)
 
 const Options = struct {
+    // intervals are in seconds
     lease_time: u32 = 0, // release when expires
     renewal_time: u32 = 0, // renew/get new from the same server
     rebinding_time: u32 = 0, // get new from any server
@@ -61,37 +67,32 @@ pub fn init(mac: Mac) Dhcp {
 }
 
 pub fn tx(self: *Dhcp, tx_bytes: []u8, now: u32) !usize {
-    again: switch (self.state) {
+    sw: switch (self.state) {
         .initial, .offer => |current| {
             if (self.transaction_id == 0) {
                 self.transaction_id = now;
             }
+            self.setState(current); // needed for encode
             const n = try self.encode(tx_bytes);
-            self.setState(if (current == .initial) .discover else .request, now);
+            self.setState(if (current == .initial) .discover else .request);
+            self.timer = .{ .start = now, .duration = response_wait_ms };
             return n;
         },
-        // TODO timeout (1000ms) should be randomized and exponentially increasing
-        // rfc: https://datatracker.ietf.org/doc/html/rfc2131 page 23 (randomized exponential backoff algorithm)
-        .discover, .request => if (now -% self.ts >= 1000) {
-            self.setState(.initial, now);
-            break :again;
+        .discover, .request => if (self.timer.expired(now)) {
+            continue :sw .initial;
         },
-        .bound => if ((now -% self.ts) / 1000 >= self.opt.lease_time) {
-            self.setState(.offer, now);
-            break :again;
+        .bound => if (self.timer.expired(now)) {
+            self.transaction_id = now;
+            continue :sw .offer;
         },
     }
     return 0;
 }
 
-fn setState(self: *Dhcp, new_state: State, now: u32) void {
+fn setState(self: *Dhcp, new_state: State) void {
     if (self.state == new_state) return;
-    if (self.state == .bound) {
-        self.transaction_id = now;
-    }
-    log.debug("dhcp state {s:<8} => {s:<8} transaction_id: {} now: {}", .{ @tagName(self.state), @tagName(new_state), self.transaction_id, now });
+    log.debug("dhcp state {s:<8} => {s:<8} transaction_id: {}", .{ @tagName(self.state), @tagName(new_state), self.transaction_id });
     self.state = new_state;
-    self.ts = now;
 }
 
 fn encode(self: *Dhcp, buffer: []u8) !usize {
@@ -195,17 +196,19 @@ pub fn rx(self: *Dhcp, rx_bytes: []const u8, now: u32) !void {
             if (message_type.? == .offer) {
                 self.ipc = ipc;
                 self.opt = opt;
-                self.setState(.offer, now);
+                self.setState(.offer);
             }
         },
         .request => {
             if (message_type.? == .ack) {
                 self.ipc = ipc;
                 self.opt = opt;
-                self.setState(.bound, now);
+                self.setState(.bound);
+                self.timer = .{ .start = now, .duration = self.opt.lease_time * 1000 };
             }
             if (message_type.? == .nak) {
-                self.setState(.initial, now);
+                self.setState(.initial);
+                self.timer = .{};
             }
         },
     }

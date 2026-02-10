@@ -73,10 +73,9 @@ pub fn main() !void {
 
     // Join network
     _ = try wifi.join(secrets.ssid, secrets.pwd, secrets.join_opt);
+    // TODO: sta ako se ne uspije spojiti dobije cyw neki error, ne moze se to progutati u net poll
 
-    //
     while (true) {
-        //timer.clear_interrupt(.alarm0);
         const now: u32 = @truncate(time.get_time_since_boot().to_us() / 1000);
         const interval = net.poll(now) catch |err| {
             log.err("net poll {}", .{err});
@@ -85,7 +84,12 @@ pub fn main() !void {
             // TODO: fatal join error is also reported here and leads to infinite loop
             continue;
         };
-        timer.schedule_alarm(.alarm0, timer.read_low() +% interval * 1000);
+        // re-schedule timer
+        timer.stop_alarm(.alarm0);
+        if (interval > 0) {
+            timer.schedule_alarm(.alarm0, timer.read_low() +% interval * 1000);
+        }
+
         while (!wakeup) {
             cpu.wfe();
         }
