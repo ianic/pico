@@ -8,7 +8,8 @@ const pio = hal.pio;
 const drivers = hal.drivers;
 const loop = @import("loop.zig");
 const pfs = @import("pfs.zig");
-const Net = @import("net/root.zig").Net;
+const nett = @import("net/root.zig");
+const Net = nett.Net;
 
 const uart = hal.uart.instance.num(0);
 const uart_tx_pin = gpio.num(0);
@@ -38,6 +39,8 @@ const timer = hal.system_timer.num(0);
 var wifi_driver: drivers.WiFi = .{};
 var rx_buffer: [1540]u8 align(4) = undefined;
 var tx_buffer: [1540]u8 align(4) = undefined;
+
+const host: [4]u8 = .{ 192, 168, 207, 181 };
 
 pub fn main() !void {
     const pins = pin_config.apply();
@@ -70,6 +73,11 @@ pub fn main() !void {
         .tx_buffer = &tx_buffer,
         .rx_buffer = &rx_buffer,
     };
+    var udp = net.udp.init();
+    udp.bind(onUdpRx, 0);
+
+    var udp2 = net.udp.init();
+    udp2.bind(onUdpRx, 8080);
 
     // Join network
     _ = try wifi.join(secrets.ssid, secrets.pwd, secrets.join_opt);
@@ -88,6 +96,12 @@ pub fn main() !void {
         timer.stop_alarm(.alarm0);
         if (interval > 0) {
             timer.schedule_alarm(.alarm0, timer.read_low() +% interval * 1000);
+        }
+
+        if (net.link_state == .up) {
+            udp.sendTo(host, 8080, "iso medo u ducan nije reko dobar dan\n") catch |err| {
+                log.debug("udp.sendTo {}", .{err});
+            };
         }
 
         while (!wakeup) {
@@ -111,4 +125,8 @@ fn timer_interrupt() linksection(".ram_text") callconv(.c) void {
     timer.clear_interrupt(.alarm0);
     wakeup = true;
     cpu.sev();
+}
+
+fn onUdpRx(udp: *nett.Udp, source: nett.Source, data: []const u8) void {
+    log.debug("udp rx {} from: {any} data: {s}", .{ udp.port, source.addr, data });
 }

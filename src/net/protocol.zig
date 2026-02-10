@@ -38,7 +38,7 @@ pub const Ethernet = extern struct {
         return try decodeAny(Self, bytes, 0);
     }
 
-    fn encode(self: Self, bytes: []u8) !usize {
+    pub fn encode(self: Self, bytes: []u8) !usize {
         return try encodeAny(self, bytes);
     }
 };
@@ -125,7 +125,7 @@ pub const Arp = extern struct {
         return try decodeAny(Self, bytes, 0);
     }
 
-    fn encode(self: Self, bytes: []u8) !usize {
+    pub fn encode(self: Self, bytes: []u8) !usize {
         return try encodeAny(self, bytes);
     }
 
@@ -571,7 +571,7 @@ pub fn ArpTable(len: usize) type {
             self.next = (self.next + 1) % len;
         }
 
-        pub fn pop(self: Self, ip: Addr) ?Entry {
+        pub fn get(self: Self, ip: Addr) ?Entry {
             const i: u32 = @bitCast(ip);
             for (self.entries) |entry| {
                 const e: u32 = @bitCast(entry.ip);
@@ -589,11 +589,11 @@ test "arp table" {
     at.push(.{ 192, 168, 1, 10 }, .{ 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x00 });
     at.push(.{ 192, 168, 1, 11 }, .{ 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x01 });
     at.push(.{ 192, 168, 1, 12 }, .{ 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x02 });
-    try testing.expectEqual(0x01, at.pop(.{ 192, 168, 1, 11 }).?.mac[5]);
-    try testing.expectEqual(0x02, at.pop(.{ 192, 168, 1, 12 }).?.mac[5]);
+    try testing.expectEqual(0x01, at.get(.{ 192, 168, 1, 11 }).?.mac[5]);
+    try testing.expectEqual(0x02, at.get(.{ 192, 168, 1, 12 }).?.mac[5]);
 
     at.push(.{ 192, 168, 1, 13 }, .{ 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x03 });
     at.push(.{ 192, 168, 1, 14 }, .{ 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x04 });
-    try testing.expectEqual(0x04, at.pop(.{ 192, 168, 1, 14 }).?.mac[5]);
-    try testing.expectEqual(null, at.pop(.{ 192, 168, 1, 10 }));
+    try testing.expectEqual(0x04, at.get(.{ 192, 168, 1, 14 }).?.mac[5]);
+    try testing.expectEqual(null, at.get(.{ 192, 168, 1, 10 }));
 }

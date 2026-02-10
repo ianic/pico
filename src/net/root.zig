@@ -21,6 +21,18 @@ pub const Net = struct {
     arp_table: protocol.ArpTable(arp_table_len) = .{},
     dhcp: Dhcp,
     link_state: Link.RecvResponse.LinkState = .down,
+    source_port: u16 = 0,
+    udp_nodes: std.SinglyLinkedList = .{},
+
+    udp: struct {
+        pub fn init(ptr: *@This()) Udp {
+            const self: *Self = @alignCast(@fieldParentPtr("udp", ptr));
+            return .{
+                .net = self,
+                .port = self.sourcePort(),
+            };
+        }
+    } = .{},
 
     fn ipIdentification(self: *Self) u16 {
         self.identification +%= 1;
@@ -80,18 +92,19 @@ pub const Net = struct {
         );
     }
 
-    pub fn sendArpRequest(self: *Self, ip: Addr) !void {
+    pub fn findRoute(self: *Self, addr: Addr) !void {
+        const ipc = self.dhcp.ipc;
         var eth: protocol.Ethernet = .{
             .destination = @splat(0xff),
-            .source = self.mac,
+            .source = ipc.mac,
             .protocol = .arp,
         };
         var arp: protocol.Arp = .{
             .opcode = .request,
-            .sender_mac = self.mac,
-            .sender_ip = self.ip,
+            .sender_mac = ipc.mac,
+            .sender_ip = ipc.addr,
             .target_mac = @splat(0xff),
-            .target_ip = ip,
+            .target_ip = addr,
         };
         var buf = self.txBuffer();
         var pos = try eth.encode(buf);
@@ -121,8 +134,8 @@ pub const Net = struct {
                     .response => {
                         self.arp_table.push(arp.sender_ip, arp.sender_mac);
                         log.debug(
-                            "arp response from ip: {any} mac: {x} arp: {}",
-                            .{ arp.sender_ip[0..4], arp.sender_mac[0..6], arp },
+                            "arp response from ip: {any} mac: {x}",
+                            .{ arp.sender_ip, arp.sender_mac },
                         );
                     },
                     else => {},
@@ -157,6 +170,18 @@ pub const Net = struct {
                         {
                             try self.dhcp.rx(bytes, now);
                             try self.dhcpTx(now);
+                            return;
+                        }
+
+                        var it = self.udp_nodes.first;
+                        while (it) |node| : (it = node.next) {
+                            const u: *Udp = @fieldParentPtr("node", node);
+                            if (u.port == udp.destination_port) {
+                                if (u.rx_callback) |cb| {
+                                    cb(u, .{ .addr = ip.source, .port = udp.source_port }, bytes);
+                                }
+                                return;
+                            }
                         }
                     },
                     else => {},
@@ -164,6 +189,13 @@ pub const Net = struct {
             },
             else => {},
         }
+    }
+
+    fn sourcePort(self: *Self) u16 {
+        self.source_port +%= 1;
+        if (self.source_port < 49152)
+            self.source_port = 49152;
+        return self.source_port;
     }
 };
 
@@ -225,3 +257,46 @@ test Timer {
     const t3: Timer = .{};
     try testing.expect(t3.expired(1));
 }
+
+pub const Source = struct {
+    addr: Addr,
+    port: u16,
+};
+pub const Target = Source;
+
+pub const Udp = struct {
+    const Self = @This();
+    pub const Callback = *const fn (*Self, Source, []const u8) void;
+
+    net: *Net = undefined,
+    port: u16 = 0,
+    rx_callback: ?Callback = null,
+    node: std.SinglyLinkedList.Node = .{},
+
+    pub fn sendTo(self: *Self, addr: Addr, port: u16, data: []const u8) !void {
+        const net = self.net;
+        const arp = net.arp_table.get(addr) orelse {
+            try net.findRoute(addr);
+            return error.NoRouteToTheHost;
+        };
+
+        const buffer = net.txBuffer();
+        const ipc = net.dhcp.ipc;
+        var udp: protocol.Udp = .{
+            .ip_identification = net.ipIdentification(),
+            .source = .{ .ip = ipc.addr, .mac = ipc.mac, .port = self.port },
+            .destination = .{ .ip = addr, .mac = arp.mac, .port = port },
+        };
+        try self.net.send(try udp.encode(buffer, data));
+    }
+
+    pub fn bind(self: *Self, callback: Callback, port: u16) void {
+        self.rx_callback = callback;
+        if (port > 0) self.port = port;
+        self.net.udp_nodes.prepend(&self.node);
+    }
+
+    pub fn unbind(self: *Self) void {
+        self.net.udp_nodes.remove(&self.node);
+    }
+};
