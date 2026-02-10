@@ -11,7 +11,7 @@ const Mac = protocol.Mac;
 const arp_table_len = 8;
 const tx_link_header = 22;
 
-pub const Net = struct {
+pub const Interface = struct {
     const Self = @This();
 
     identification: u16 = 0,
@@ -22,7 +22,7 @@ pub const Net = struct {
     dhcp: Dhcp,
     link_state: Link.RecvResponse.LinkState = .down,
     source_port: u16 = 0,
-    udp_nodes: std.SinglyLinkedList = .{},
+    udp_handlers: std.SinglyLinkedList = .{},
 
     udp: struct {
         pub fn init(ptr: *@This()) Udp {
@@ -66,12 +66,12 @@ pub const Net = struct {
             var udp: protocol.Udp = .{
                 .ip_identification = self.ipIdentification(),
                 .source = .{
-                    .ip = @splat(0),
+                    .addr = @splat(0),
                     .mac = ipc.mac,
                     .port = @intFromEnum(Ports.dhcp_client),
                 },
                 .destination = .{
-                    .ip = @splat(0xff),
+                    .addr = @splat(0xff),
                     .mac = @splat(0xff),
                     .port = @intFromEnum(Ports.dhcp_server),
                 },
@@ -173,7 +173,7 @@ pub const Net = struct {
                             return;
                         }
 
-                        var it = self.udp_nodes.first;
+                        var it = self.udp_handlers.first;
                         while (it) |node| : (it = node.next) {
                             const u: *Udp = @fieldParentPtr("node", node);
                             if (u.port == udp.destination_port) {
@@ -268,10 +268,14 @@ pub const Udp = struct {
     const Self = @This();
     pub const Callback = *const fn (*Self, Source, []const u8) void;
 
-    net: *Net = undefined,
+    net: *Interface = undefined,
     port: u16 = 0,
     rx_callback: ?Callback = null,
     node: std.SinglyLinkedList.Node = .{},
+
+    pub fn txBuffer(self: Self) []u8 {
+        return self.net.txBuffer()[protocol.Udp.header_len..];
+    }
 
     pub fn sendTo(self: *Self, addr: Addr, port: u16, data: []const u8) !void {
         const net = self.net;
@@ -284,8 +288,8 @@ pub const Udp = struct {
         const ipc = net.dhcp.ipc;
         var udp: protocol.Udp = .{
             .ip_identification = net.ipIdentification(),
-            .source = .{ .ip = ipc.addr, .mac = ipc.mac, .port = self.port },
-            .destination = .{ .ip = addr, .mac = arp.mac, .port = port },
+            .source = .{ .addr = ipc.addr, .mac = ipc.mac, .port = self.port },
+            .destination = .{ .addr = addr, .mac = arp.mac, .port = port },
         };
         try self.net.send(try udp.encode(buffer, data));
     }
@@ -293,10 +297,10 @@ pub const Udp = struct {
     pub fn bind(self: *Self, callback: Callback, port: u16) void {
         self.rx_callback = callback;
         if (port > 0) self.port = port;
-        self.net.udp_nodes.prepend(&self.node);
+        self.net.udp_handlers.prepend(&self.node);
     }
 
     pub fn unbind(self: *Self) void {
-        self.net.udp_nodes.remove(&self.node);
+        self.net.udp_handlers.remove(&self.node);
     }
 };

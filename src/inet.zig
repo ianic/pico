@@ -8,8 +8,7 @@ const pio = hal.pio;
 const drivers = hal.drivers;
 const loop = @import("loop.zig");
 const pfs = @import("pfs.zig");
-const nett = @import("net/root.zig");
-const Net = nett.Net;
+const net = @import("net/root.zig");
 
 const uart = hal.uart.instance.num(0);
 const uart_tx_pin = gpio.num(0);
@@ -67,16 +66,16 @@ pub fn main() !void {
     var led = wifi.gpio(0);
     log.debug("mac address: {x}", .{wifi.mac});
 
-    var net = Net{
+    var nic = net.Interface{
         .dhcp = .init(wifi.mac),
         .driver = wifi.link(),
         .tx_buffer = &tx_buffer,
         .rx_buffer = &rx_buffer,
     };
-    var udp = net.udp.init();
+    var udp = nic.udp.init();
     udp.bind(onUdpRx, 0);
 
-    var udp2 = net.udp.init();
+    var udp2 = nic.udp.init();
     udp2.bind(onUdpRx, 8080);
 
     // Join network
@@ -85,7 +84,7 @@ pub fn main() !void {
 
     while (true) {
         const now: u32 = @truncate(time.get_time_since_boot().to_us() / 1000);
-        const interval = net.poll(now) catch |err| {
+        const interval = nic.poll(now) catch |err| {
             log.err("net poll {}", .{err});
             // there can be more waiting packets
             // log error and poll again
@@ -98,7 +97,7 @@ pub fn main() !void {
             timer.schedule_alarm(.alarm0, timer.read_low() +% interval * 1000);
         }
 
-        if (net.link_state == .up) {
+        if (nic.link_state == .up) {
             udp.sendTo(host, 8080, "iso medo u ducan nije reko dobar dan\n") catch |err| {
                 log.debug("udp.sendTo {}", .{err});
             };
@@ -127,6 +126,6 @@ fn timer_interrupt() linksection(".ram_text") callconv(.c) void {
     cpu.sev();
 }
 
-fn onUdpRx(udp: *nett.Udp, source: nett.Source, data: []const u8) void {
+fn onUdpRx(udp: *net.Udp, source: net.Source, data: []const u8) void {
     log.debug("udp rx {} from: {any} data: {s}", .{ udp.port, source.addr, data });
 }

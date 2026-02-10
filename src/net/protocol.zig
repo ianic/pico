@@ -47,12 +47,12 @@ pub const Udp = struct {
     const Self = @This();
     ip_identification: u16,
     source: struct {
-        ip: Addr,
+        addr: Addr,
         mac: Mac,
         port: u16,
     },
     destination: struct {
-        ip: Addr,
+        addr: Addr,
         mac: Mac,
         port: u16,
     },
@@ -68,8 +68,8 @@ pub const Udp = struct {
         var ip: Ip = .{
             .identification = self.ip_identification,
             .protocol = .udp,
-            .source = self.source.ip,
-            .destination = self.destination.ip,
+            .source = self.source.addr,
+            .destination = self.destination.addr,
             .total_length = @intCast(@sizeOf(Ip) + @sizeOf(UdpHeader) + payload.len),
         };
         var udp: UdpHeader = .{
