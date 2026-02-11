@@ -66,14 +66,16 @@ pub fn init(mac: Mac) Dhcp {
     return .{ .ipc = .{ .mac = mac } };
 }
 
-pub fn tx(self: *Dhcp, tx_bytes: []u8, now: u32) !usize {
+/// Create dicover or reuqest message into buffer. Returns number of bytes
+/// stored in buffer. If there is no message in current state returns 0.
+pub fn getMessage(self: *Dhcp, buffer: []u8, now: u32) !usize {
     sw: switch (self.state) {
         .initial, .offer => |current| {
             if (self.transaction_id == 0) {
                 self.transaction_id = now;
             }
             self.setState(current); // needed for encode
-            const n = try self.encode(tx_bytes);
+            const n = try self.encode(buffer);
             self.setState(if (current == .initial) .discover else .request);
             self.timer = .{ .start = now, .duration = response_wait_ms };
             return n;

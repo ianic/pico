@@ -4,9 +4,9 @@ const log = std.log.scoped(.net);
 
 const Link = @import("link");
 const Dhcp = @import("Dhcp.zig");
-const protocol = @import("protocol.zig");
-const Addr = protocol.Addr;
-const Mac = protocol.Mac;
+const ptc = @import("protocol.zig");
+const Addr = ptc.Addr;
+const Mac = ptc.Mac;
 
 const arp_table_len = 8;
 const tx_link_header = 22;
@@ -18,7 +18,7 @@ pub const Interface = struct {
     driver: Link,
     tx_buffer: []u8,
     rx_buffer: []u8,
-    arp_table: protocol.ArpTable(arp_table_len) = .{},
+    arp_table: ptc.ArpTable(arp_table_len) = .{},
     dhcp: Dhcp,
     link_state: Link.RecvResponse.LinkState = .down,
     source_port: u16 = 0,
@@ -43,7 +43,11 @@ pub const Interface = struct {
         while (true) {
             const rsp = try self.driver.vtable.recv(self.driver.ptr, self.rx_buffer);
             if (rsp.len > 0) {
-                try self.rx(self.rx_buffer[rsp.head..][0..rsp.len], now);
+                const bytes = self.rx_buffer[rsp.head..][0..rsp.len];
+                const n = try self.rx(bytes, now);
+                if (n != bytes.len) {
+                    log.err("link recv: {}, n: {}", .{ bytes.len, n });
+                }
             }
             if (rsp.link_state != self.link_state) {
                 self.link_state = rsp.link_state;
@@ -52,22 +56,21 @@ pub const Interface = struct {
         }
         if (self.link_state == .up)
             if (self.dhcp.timer.expired(now))
-                try self.dhcpTx(now);
+                try self.txDhcp(now);
 
         return self.dhcp.timer.expiresIn(now);
     }
 
-    fn dhcpTx(self: *Self, now: u32) !void {
-        const ipc = self.dhcp.ipc;
+    fn txDhcp(self: *Self, now: u32) !void {
         const buffer = self.txBuffer();
-        const n = try self.dhcp.tx(buffer[protocol.Udp.header_len..], now);
+        const n = try self.dhcp.getMessage(buffer[ptc.Udp.header_len..], now);
         if (n > 0) {
-            const dhcp_payload = buffer[protocol.Udp.header_len..][0..n];
-            var udp: protocol.Udp = .{
+            const dhcp_payload = buffer[ptc.Udp.header_len..][0..n];
+            var udp: ptc.Udp = .{
                 .ip_identification = self.ipIdentification(),
                 .source = .{
                     .addr = @splat(0),
-                    .mac = ipc.mac,
+                    .mac = self.dhcp.ipc.mac,
                     .port = @intFromEnum(Ports.dhcp_client),
                 },
                 .destination = .{
@@ -94,12 +97,12 @@ pub const Interface = struct {
 
     pub fn findRoute(self: *Self, addr: Addr) !void {
         const ipc = self.dhcp.ipc;
-        var eth: protocol.Ethernet = .{
+        var eth: ptc.Ethernet = .{
             .destination = @splat(0xff),
             .source = ipc.mac,
             .protocol = .arp,
         };
-        var arp: protocol.Arp = .{
+        var arp: ptc.Arp = .{
             .opcode = .request,
             .sender_mac = ipc.mac,
             .sender_ip = ipc.addr,
@@ -112,82 +115,72 @@ pub const Interface = struct {
         try self.send(pos);
     }
 
-    fn rx(self: *Self, rx_bytes: []const u8, now: u32) !void {
-        var bytes: []const u8 = rx_bytes;
-        const eth = try protocol.Ethernet.decode(bytes);
-        bytes = bytes[@sizeOf(protocol.Ethernet)..];
+    /// Packet receive. Returns number of bytes consumed from rx_bytes.
+    fn rx(self: *Self, rx_bytes: []const u8, now: u32) !usize {
         const ipc = self.dhcp.ipc;
+
+        const eth = try ptc.Ethernet.decode(rx_bytes);
+        const eth_payload = rx_bytes[@sizeOf(ptc.Ethernet)..];
 
         switch (eth.protocol) {
             .arp => {
-                const arp = try protocol.Arp.decode(bytes);
-                bytes = bytes[@sizeOf(protocol.Arp)..];
+                const arp = try ptc.Arp.decode(eth_payload);
                 switch (arp.opcode) {
-                    .request => {
-                        if (!mem.eql(u8, &arp.target_ip, &ipc.addr)) return;
+                    .request => if (mem.eql(u8, &arp.target_ip, &ipc.addr)) {
                         try self.send(try arp.tx(self.txBuffer(), ipc));
-                        log.debug(
-                            "arp request from ip: {any} mac: {x}",
-                            .{ arp.sender_ip[0..4], arp.sender_mac[0..6] },
-                        );
                     },
-                    .response => {
-                        self.arp_table.push(arp.sender_ip, arp.sender_mac);
-                        log.debug(
-                            "arp response from ip: {any} mac: {x}",
-                            .{ arp.sender_ip, arp.sender_mac },
-                        );
-                    },
+                    .response => self.arp_table.push(arp.sender_ip, arp.sender_mac),
                     else => {},
                 }
-                return;
+                // log.debug("arp {} from ip: {any} mac: {x}", .{ arp.opcode, arp.sender_ip, arp.sender_mac });
+                return @sizeOf(ptc.Ethernet) + @sizeOf(ptc.Arp);
             },
             .ip => {
-                const ip = try protocol.Ip.decode(bytes);
-                if (bytes.len < ip.total_length)
-                    return error.InsufficientBuffer;
+                const ip = try ptc.Ip.decode(eth_payload);
+                if (eth_payload.len < ip.total_length)
+                    return error.IpLength;
                 if (ip.fragment.mf or ip.fragment.offset > 0)
                     return error.IpFragmented;
-                bytes = bytes[0..ip.total_length][@sizeOf(protocol.Ip)..];
+                const ip_payload = eth_payload[0..ip.total_length][@sizeOf(ptc.Ip)..];
 
                 switch (ip.protocol) {
-                    .icmp => {
-                        if (!mem.eql(u8, &ip.destination, &ipc.addr)) return;
-                        const icmp = try protocol.Icmp.decode(bytes);
+                    .icmp => if (mem.eql(u8, &ip.destination, &ipc.addr)) {
+                        const icmp = try ptc.Icmp.decode(ip_payload);
                         if (icmp.typ == .request) {
-                            const payload = bytes[@sizeOf(protocol.Icmp)..];
-                            try self.send(try icmp.tx(self.txBuffer(), eth, ip, payload, ipc));
+                            const icmp_payload = ip_payload[@sizeOf(ptc.Icmp)..];
+                            try self.send(try icmp.tx(self.txBuffer(), eth, ip, icmp_payload, ipc));
                         }
                     },
                     .udp => {
-                        const udp = try protocol.UdpHeader.decode(bytes);
-                        if (bytes.len < udp.length) return error.InsufficientBuffer;
-                        bytes = bytes[@sizeOf(protocol.UdpHeader)..udp.length];
+                        const udp = try ptc.UdpHeader.decode(ip_payload);
+                        if (ip_payload.len < udp.length) return error.UdpLength;
+                        const udp_payload = ip_payload[@sizeOf(ptc.UdpHeader)..udp.length];
 
-                        // dhcp response
                         if (udp.source_port == @intFromEnum(Ports.dhcp_server) and
                             udp.destination_port == @intFromEnum(Ports.dhcp_client))
-                        {
-                            try self.dhcp.rx(bytes, now);
-                            try self.dhcpTx(now);
-                            return;
-                        }
-
-                        var it = self.udp_handlers.first;
-                        while (it) |node| : (it = node.next) {
-                            const u: *Udp = @fieldParentPtr("node", node);
-                            if (u.port == udp.destination_port) {
-                                if (u.rx_callback) |cb| {
-                                    cb(u, .{ .addr = ip.source, .port = udp.source_port }, bytes);
+                        { // udp packet is dhcp response
+                            try self.dhcp.rx(udp_payload, now);
+                            try self.txDhcp(now);
+                        } else {
+                            // find handler for the incoming packet destination port
+                            const src: Source = .{ .addr = ip.source, .port = udp.source_port };
+                            var it = self.udp_handlers.first;
+                            while (it) |node| : (it = node.next) {
+                                const handler: *Udp = @fieldParentPtr("node", node);
+                                if (handler.port == udp.destination_port) {
+                                    if (handler.rx_callback) |cb| cb(handler, src, udp_payload);
+                                    break;
                                 }
-                                return;
                             }
                         }
                     },
                     else => {},
                 }
+                return @sizeOf(ptc.Ethernet) + ip.total_length;
             },
-            else => {},
+            else => {
+                return rx_bytes.len;
+            },
         }
     }
 
@@ -274,10 +267,11 @@ pub const Udp = struct {
     node: std.SinglyLinkedList.Node = .{},
 
     pub fn txBuffer(self: Self) []u8 {
-        return self.net.txBuffer()[protocol.Udp.header_len..];
+        return self.net.txBuffer()[ptc.Udp.header_len..];
     }
 
     pub fn sendTo(self: *Self, addr: Addr, port: u16, data: []const u8) !void {
+        // TODO provjeri da je link up i da imam ip adrese
         const net = self.net;
         const arp = net.arp_table.get(addr) orelse {
             try net.findRoute(addr);
@@ -286,7 +280,7 @@ pub const Udp = struct {
 
         const buffer = net.txBuffer();
         const ipc = net.dhcp.ipc;
-        var udp: protocol.Udp = .{
+        var udp: ptc.Udp = .{
             .ip_identification = net.ipIdentification(),
             .source = .{ .addr = ipc.addr, .mac = ipc.mac, .port = self.port },
             .destination = .{ .addr = addr, .mac = arp.mac, .port = port },
