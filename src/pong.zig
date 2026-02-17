@@ -59,7 +59,7 @@ pub fn main() !void {
     var ts = time.get_time_since_boot();
     while (true) {
         // run lwip poller
-        try nic.poll();
+        _ = try nic.poll();
 
         // blink
         const now = time.get_time_since_boot();

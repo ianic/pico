@@ -126,6 +126,12 @@ fn encode(self: *Dhcp, buffer: []u8) !usize {
         try w.writeByte(2);
         try w.writeInt(u16, 1472, .big);
     }
+    {
+        const host_name = "pico";
+        try w.writeByte(@intFromEnum(Option.host_name));
+        try w.writeByte(host_name.len);
+        try w.writeAll(host_name);
+    }
     { // parameter request list
         try w.writeByte(@intFromEnum(Option.parameter_request_list));
         try w.writeByte(4);
@@ -225,6 +231,7 @@ const Option = enum(u8) {
     subnet_mask = 1,
     gateway = 3,
     dns_server = 6,
+    host_name = 12,
     domain_name = 15,
     mtu = 26,
     broadcast_addr = 28,

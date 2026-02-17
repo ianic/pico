@@ -68,7 +68,7 @@ pub fn main() !void {
         if (ticks % 100 == 0) {
             loop.check_reset(uart);
         }
-        nic.poll() catch |err| {
+        _ = nic.poll() catch |err| {
             log.err("net pool {}", .{err});
         };
         if (join_state != wifi.join_state()) {
