@@ -31,13 +31,14 @@ pub const Interval = struct {
 // Puts pico in bootsel mode is command is received on uart.
 pub fn check_reset(uart: hal.uart.UART) void {
     const MAGICREBOOTCODE: u8 = 0xAB;
-    const v = uart.read_word() catch {
+    while (uart.read_word() catch {
         uart.clear_errors();
         return;
-    } orelse return;
-    if (v == MAGICREBOOTCODE) {
-        log.warn("reboot cmd received", .{});
-        hal.rom.reset_to_usb_boot();
+    }) |v| {
+        if (v == MAGICREBOOTCODE) {
+            log.warn("reboot cmd received", .{});
+            hal.rom.reset_to_usb_boot();
+        }
     }
 }
 

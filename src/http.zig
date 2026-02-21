@@ -12,12 +12,13 @@ const pfs = @import("pfs.zig");
 const TempSensor = @import("temp_sensor.zig").TempSensor;
 
 const uart = hal.uart.instance.num(0);
-const uart_tx_pin = gpio.num(0);
+
 pub const microzig_options = microzig.Options{
     .log_level = .debug,
     .logFn = hal.uart.log,
     .interrupts = .{
         .IO_IRQ_BANK0 = .{ .c = gpio_interrupt },
+        .UART0_IRQ = .{ .c = uart_interrupt },
         .TIMER0_IRQ_0 = .{ .c = net_timer_interrupt },
         .TIMER0_IRQ_1 = .{ .c = sensor_timer_interrupt },
     },
@@ -43,12 +44,16 @@ const secrets = @import("secrets.zig");
 const blob_addr = 0x1030_0000;
 const timer = hal.system_timer.num(0);
 var wifi_driver: drivers.WiFi = .{};
+var session_id: u32 = 0;
 
 pub fn main() !void {
     const pins = pin_config.apply();
     // init uart logging
     uart.apply(.{ .clock_config = hal.clock_config });
     hal.uart.init_logger(uart);
+    // uart interrupt
+    uart.set_interrupts_enabled(.{ .rx = true, .rt = true });
+    microzig.interrupt.enable(.UART0_IRQ);
 
     // Enable gpio interrupt callback
     microzig.interrupt.enable(.IO_IRQ_BANK0);
@@ -80,6 +85,7 @@ pub fn main() !void {
     try nic.init(wifi.mac, .{
         .hostname = "pico",
         .sntp_server = "pool.ntp.org",
+        .status_callback = onNetStatus,
     });
 
     // init server
@@ -90,16 +96,12 @@ pub fn main() !void {
     try srv.bind(80);
 
     const ts: TempSensor = .init(pins.temp);
-    ts.convert() catch |err| {
-        log.err("temperature sensor convert {}", .{err});
-    };
-    timer.schedule_alarm(.alarm1, timer.read_low() +% std.time.us_per_s);
 
-    var sntp_ts = net.sntp.time.ts;
+    //var sntp_ts = net.sntp.time.ts;
     //pins.rel1.toggle();
     while (true) {
-        while (events.get()) |pending| {
-            if (pending.isSet(.net_irq) or pending.isSet(.net_timeout)) {
+        while (events.pop()) |event| switch (event) {
+            .net_irq, .net_timeout => {
                 timer.stop_alarm(.alarm0);
                 while (true) {
                     const next_timeout = try nic.poll();
@@ -108,50 +110,60 @@ pub fn main() !void {
                         break;
                     }
                 }
-            }
-            if (pending.isSet(.sensor_timeout)) {
+            },
+            .temp_read => {
                 const external = ts.read() catch |err| brk: {
                     log.err("temperature sensor read {}", .{err});
                     break :brk 0;
                 };
                 log.debug("external temp: {}", .{external});
+                _ = events.push(.temp_convert);
+                pins.led.toggle();
 
+                // ts.convert() catch |err| {
+                //     log.err("temperature sensor convert {}", .{err});
+                // };
+                // timer.schedule_alarm(.alarm1, timer.read_low() +% std.time.us_per_s);
+                //pins.rel1.toggle();
+                //pins.rel2.toggle();
+
+            },
+            .sntp_time => {
+                session_id = net.sntp.unix();
+                _ = events.push(.temp_convert);
+            },
+            .temp_convert => {
                 ts.convert() catch |err| {
                     log.err("temperature sensor convert {}", .{err});
                 };
                 timer.schedule_alarm(.alarm1, timer.read_low() +% std.time.us_per_s);
-                //pins.rel1.toggle();
-                //pins.rel2.toggle();
-                pins.led.toggle();
-            }
-        }
+            },
+        };
+
         cpu.wfi();
         led.toggle();
-
-        if (sntp_ts != net.sntp.time.ts) {
-            log.debug("sntp {}", .{net.sntp.time});
-            sntp_ts = net.sntp.time.ts;
-        }
-        // if (net.sntp.date_time(std.time.s_per_hour)) |dt| {re
-        //     log.debug("date: {}", .{dt});
-        // }
-
-        loop.check_reset(uart);
     }
 }
 
 fn gpio_interrupt() linksection(".ram_text") callconv(.c) void {
-    events.set(.net_irq);
+    _ = events.push(.net_irq);
     wifi_driver.disable_irq();
 }
 
+fn uart_interrupt() linksection(".ram_text") callconv(.c) void {
+    // clear interrupt
+    uart.get_regs().UARTICR.write(.{ .RXIC = 1, .RTIC = 1 });
+    loop.check_reset(uart);
+    //log.debug("check_reset", .{});
+}
+
 fn net_timer_interrupt() linksection(".ram_text") callconv(.c) void {
-    events.set(.net_timeout);
+    _ = events.push(.net_timeout);
     timer.clear_interrupt(.alarm0);
 }
 
 fn sensor_timer_interrupt() linksection(".ram_text") callconv(.c) void {
-    events.set(.sensor_timeout);
+    _ = events.push(.temp_read);
     timer.clear_interrupt(.alarm1);
 }
 
@@ -203,39 +215,20 @@ const http_ok = "HTTP/1.1 200 OK\r\n" ++
     "Connection: close\r\n" ++
     "\r\n";
 
-var events: Events = .{};
+var events: @import("atomic_ring_buffer.zig").AtomicRingBuffer(Event, 64) = .{};
 
-const Events = struct {
-    // Each bit represents an event type
-    pending: Atomic(u32) = Atomic(u32).init(0),
-
-    const Event = enum(u5) {
-        net_irq = 0,
-        net_timeout = 1,
-        sensor_timeout = 2,
-    };
-
-    pub fn set(self: *Events, event: Event) void {
-        const bit = @as(u32, 1) << @intFromEnum(event);
-        _ = self.pending.fetchOr(bit, .release);
-    }
-
-    pub fn get(self: *Events) ?Pending {
-        const p = Pending{ .value = self.pending.swap(0, .acquire) };
-        if (p.empty()) return null;
-        return p;
-    }
-
-    const Pending = struct {
-        value: u32,
-
-        fn isSet(self: Pending, event: Event) bool {
-            const bit = @as(u32, 1) << @intFromEnum(event);
-            return self.value & bit > 0;
-        }
-
-        fn empty(self: Pending) bool {
-            return self.value == 0;
-        }
-    };
+const Event = enum(u8) {
+    net_irq,
+    net_timeout,
+    temp_convert,
+    temp_read,
+    sntp_time,
 };
+
+fn onNetStatus(nic: *net.Interface, status: net.Interface.Status) void {
+    _ = nic;
+    log.debug("onNetStatus: {}", .{status});
+    if (session_id == 0 and status.unix_time > 0) {
+        _ = events.push(.sntp_time);
+    }
+}
