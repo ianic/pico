@@ -38,6 +38,7 @@ const timer = hal.system_timer.num(0);
 var wifi_driver: drivers.WiFi = .{};
 var rx_buffer: [1540]u8 align(4) = undefined;
 var tx_buffer: [1540]u8 align(4) = undefined;
+var neki_buffer: [1024 * 64]u8 = undefined;
 
 const host: [4]u8 = .{ 192, 168, 207, 181 };
 
@@ -78,13 +79,34 @@ pub fn main() !void {
     var udp2 = nic.udp.init();
     udp2.bind(onUdpRx, 8080);
 
+    var heap_allocator: microzig.Allocator = try .init_with_heap(0);
+    log.debug(
+        "allocator: {x} {x} {}b {}Kb",
+        .{
+            heap_allocator.low_boundary,
+            heap_allocator.high_boundary,
+            heap_allocator.free_heap(),
+            heap_allocator.free_heap() / 1024,
+        },
+    );
+    log.debug("buffers: {x}-{x} {x}-{x} {x}-{x}", .{
+        @intFromPtr(&rx_buffer[0]),
+        @intFromPtr(&rx_buffer[rx_buffer.len - 1]),
+        @intFromPtr(&tx_buffer[0]),
+        @intFromPtr(&tx_buffer[tx_buffer.len - 1]),
+        @intFromPtr(&neki_buffer[0]),
+        @intFromPtr(&neki_buffer[neki_buffer.len - 1]),
+    });
+    const gpa = heap_allocator.allocator();
+    _ = gpa;
+
     // Join network
     _ = try wifi.join(secrets.ssid, secrets.pwd, secrets.join_opt);
     // TODO: sta ako se ne uspije spojiti dobije cyw neki error, ne moze se to progutati u net poll
 
     while (true) {
         const now: u32 = @truncate(time.get_time_since_boot().to_us() / 1000);
-        const interval = nic.poll(now) catch |err| {
+        var interval = nic.poll(now) catch |err| {
             log.err("net poll {}", .{err});
             // there can be more waiting packets
             // log error and poll again
@@ -94,6 +116,7 @@ pub fn main() !void {
         // re-schedule timer
         timer.stop_alarm(.alarm0);
         if (interval > 0) {
+            if (interval > 1000) interval = 1000;
             timer.schedule_alarm(.alarm0, timer.read_low() +% interval * 1000);
         }
 
@@ -103,27 +126,21 @@ pub fn main() !void {
             };
         }
 
-        while (!wakeup) {
-            cpu.wfe();
-        }
-        wakeup = false;
+        cpu.wfi();
+        //log.debug("wfi", .{});
         led.toggle();
     }
 }
 
-var wakeup: bool = false;
-
 fn gpio_interrupt() linksection(".ram_text") callconv(.c) void {
     // Disable interrupts storm, store source and wake up main loop.
     wifi_driver.disable_irq();
-    wakeup = true;
-    cpu.sev();
+    //log.debug("irq", .{});
 }
 
 fn timer_interrupt() linksection(".ram_text") callconv(.c) void {
     timer.clear_interrupt(.alarm0);
-    wakeup = true;
-    cpu.sev();
+    //log.debug("timer", .{});
 }
 
 fn onUdpRx(udp: *net.Udp, source: net.Source, data: []const u8) void {
