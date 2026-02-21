@@ -17,13 +17,14 @@ pub fn build(b: *std.Build) void {
     const net_dep = b.dependency("net", .{
         .target = b.resolveTargetQuery(target.zig_target),
         .optimize = optimize,
-        .mem_size = 32 * 1024,
+        .mem_size = 8 * 1024,
         .pbuf_pool_size = 32,
         .mtu = 1500,
         // Cyw43 driver requires 22 bytes of header and 4 bytes of footer.
         // header + ethernet + mtu + footer = 22 + 14 + 1500 + 4 = 1540
         .pbuf_length = 1540,
         .pbuf_header_length = 22,
+        .lwip_include_dir = b.path("src/lwip/include"),
     });
     const net_mod = net_dep.module("net");
     const link_mod = b.dependency("link", .{}).module("link");
@@ -33,6 +34,7 @@ pub fn build(b: *std.Build) void {
         "udp",
         "pong",
         "inet",
+        "http",
     };
     inline for (apps) |app| {
         const firmware = mb.add_firmware(.{
@@ -60,6 +62,7 @@ pub fn build(b: *std.Build) void {
                         "printf '\xAB' > /dev/ttyACM0 || true                   \n" ++
                         "until picotool load --offset 0x10000000 -x -f $bin; do \n" ++
                         "    sleep 1                                            \n" ++
+                        "    printf '\xAB' > /dev/ttyACM0 || true               \n" ++
                         "done                                                   \n",
                     .{name},
                 ));

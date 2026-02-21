@@ -3,6 +3,7 @@
 const std = @import("std");
 const microzig = @import("microzig");
 const hal = microzig.hal;
+const printz = @import("printz/root.zig");
 
 /// Time since boot in milliseconds.
 export fn lwip_sys_now() u32 {
@@ -24,4 +25,17 @@ export fn lwip_rand() u32 {
             break :brk val;
         },
     };
+}
+
+const log = std.log.scoped(.lwip);
+
+export fn lwip_diag2(fmt: [*:0]const u8, ...) void {
+    var args = @cVaStart();
+    defer @cVaEnd(&args);
+
+    var buf: [256]u8 = undefined;
+    const n = printz.vsnprintf(&buf, buf.len, fmt, &args);
+    if (n > 0) {
+        log.debug("{s}", .{buf[0..@intCast(n)]});
+    }
 }
