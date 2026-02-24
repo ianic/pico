@@ -1,0 +1,62 @@
+<html>
+    <head>
+        <title>Pico</title>
+        <style>
+         .centered-text {
+             text-align: center;
+             font-size: 150px;        /* 32px, or use 1.5em, 24px, etc */
+             font-weight: bold;      /* Optional: thicker text */
+             padding: 20px;          /* Breathing room */
+         }
+        </style>
+    </head>
+    <body>
+        <div id="value" class="centered-text"></div>
+        <script>
+         // On page load
+         document.addEventListener('DOMContentLoaded', async () => {
+             //const response = await fetch('http://pico.lan');
+             fetch('http://pico.lan')
+                 .then(response => response.arrayBuffer())
+                 .then(buffer => {                     
+                     const dv = new DataView(buffer);  
+
+                     for (idx = 0; idx + 7 <= dv.byteLength; idx += 7) {
+                         const ts = dv.getUint32(idx, true);  
+                         const temp = dv.getUint16(idx + 4, true);
+                         const flags = dv.getUint8(idx + 6, true);
+
+                         if (idx == 0) updateCurrent(ts, temp, flags);
+                         
+                         const date = new Date(ts * 1000);
+                         console.log(`${date.toTimeString().slice(0,8)} ${temp/16}`);
+                     }
+                 });
+
+             
+             // try {
+             //     
+             //     const response = await fetch("data.bin");
+             //     if (!response.ok) throw new Error(`HTTP ${response.status}`);
+             //     
+             //     const jsonData = await response.json();
+             //     
+             //     // Use data
+             //     // document.getElementById('data').textContent = 
+             //     //     JSON.stringify(jsonData, null, 2);
+             //     
+             //     console.log('Loaded:', jsonData);
+             // } catch (error) {
+             //     console.error('JSON fetch failed:', error);
+             //     //document.getElementById('data').textContent = 'Load failed';
+             // }
+         });
+
+         const updateCurrent = (ts, temp, flags) => {
+             document.getElementById('value').textContent = (temp / 16).toString(); 
+         }
+        </script>
+    </body>
+</html>
+
+

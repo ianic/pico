@@ -90,7 +90,7 @@ pub const TempSensor = struct {
         self.ow.putByte(0x44);
     }
 
-    pub fn read(self: TempSensor) !f32 {
+    pub fn read(self: TempSensor) !struct { u16, f32 } {
         // read the contents of the scratchpad
         try self.ow.reset();
         self.ow.putByte(0xcc);
@@ -106,7 +106,7 @@ pub const TempSensor = struct {
         const lsb = res[0];
         const msb = res[1];
         const temp: u16 = (@as(u16, @intCast(msb)) << 8 | lsb);
-        return @as(f32, @floatFromInt(temp)) / 16;
+        return .{ temp, @as(f32, @floatFromInt(temp)) / 16 };
     }
 
     fn crc(bytes: []const u8) u8 {

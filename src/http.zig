@@ -44,7 +44,36 @@ const secrets = @import("secrets.zig");
 const blob_addr = 0x1030_0000;
 const timer = hal.system_timer.num(0);
 var wifi_driver: drivers.WiFi = .{};
+
 var session_id: u32 = 0;
+var reading_ts: u32 = 0;
+var readings: @import("ring_buffer.zig").CircularBuffer(Reading, 32 * 1024) = .{};
+
+const Reading = packed struct {
+    ts: u32,
+    temp: u16,
+    relay: u1 = 0,
+    _padding: u7 = 0,
+};
+
+pub fn add_reading(temp: u16, relay: u1) void {
+    const ts = net.sntp.unix();
+    reading_ts = ts;
+
+    if (readings.last()) |last| {
+        if (last.temp == temp and last.relay == relay) {
+            var upd = last;
+            upd.ts = ts;
+            readings.update(upd);
+            return;
+        }
+    }
+    readings.add(.{
+        .ts = ts,
+        .temp = temp,
+        .relay = relay,
+    });
+}
 
 pub fn main() !void {
     const pins = pin_config.apply();
@@ -95,6 +124,9 @@ pub fn main() !void {
     };
     try srv.bind(80);
 
+    var udp = try net.Udp.init(&nic);
+    const sink: net.Endpoint = try .parse("192.168.207.181", 4242);
+
     const ts: TempSensor = .init(pins.temp);
 
     //var sntp_ts = net.sntp.time.ts;
@@ -111,32 +143,39 @@ pub fn main() !void {
                     }
                 }
             },
-            .temp_read => {
-                const external = ts.read() catch |err| brk: {
+            .temp_converted => {
+                _ = events.push(.temp_read);
+                const temp, const f = ts.read() catch |err| {
                     log.err("temperature sensor read {}", .{err});
-                    break :brk 0;
+                    continue;
                 };
-                log.debug("external temp: {}", .{external});
-                _ = events.push(.temp_convert);
+                add_reading(temp, 0);
+                _ = events.push(.reading_added);
+                log.debug("external temp: {} {} {} {} {}", .{ f, temp, readings.last().?, readings.count, reading_ts });
                 pins.led.toggle();
-
-                // ts.convert() catch |err| {
-                //     log.err("temperature sensor convert {}", .{err});
-                // };
-                // timer.schedule_alarm(.alarm1, timer.read_low() +% std.time.us_per_s);
-                //pins.rel1.toggle();
-                //pins.rel2.toggle();
-
             },
-            .sntp_time => {
+            .time_synced => {
                 session_id = net.sntp.unix();
-                _ = events.push(.temp_convert);
+                add_reading(0, 0);
+                _ = events.push(.temp_read);
             },
-            .temp_convert => {
+            .temp_read => {
                 ts.convert() catch |err| {
                     log.err("temperature sensor convert {}", .{err});
                 };
                 timer.schedule_alarm(.alarm1, timer.read_low() +% std.time.us_per_s);
+            },
+            .reading_added => {
+                var buf: [1472]u8 = undefined;
+                var w = std.io.Writer.fixed(&buf);
+
+                var iter = readings.iterator();
+                while (iter.next()) |r| {
+                    w.writeStruct(r, .little) catch break;
+                }
+                udp.send(buf[0..w.end], sink) catch |err| {
+                    log.err("udp send {}", .{err});
+                };
             },
         };
 
@@ -163,7 +202,7 @@ fn net_timer_interrupt() linksection(".ram_text") callconv(.c) void {
 }
 
 fn sensor_timer_interrupt() linksection(".ram_text") callconv(.c) void {
-    _ = events.push(.temp_read);
+    _ = events.push(.temp_converted);
     timer.clear_interrupt(.alarm1);
 }
 
@@ -192,12 +231,37 @@ const Session = struct {
     recv_bytes: usize = 0,
 
     fn on_recv(conn: *net.tcp.Connection, bytes: []u8) void {
-        const self: *Self = @fieldParentPtr("conn", conn);
-        self.recv_bytes += bytes.len;
         log.debug("{x} recv {s}", .{ @intFromPtr(conn), bytes });
-        conn.send(http_ok) catch |err| {
-            log.debug("send {}", .{err});
+        respond(conn) catch |err| {
+            log.err("respond: {}", .{err});
         };
+    }
+
+    fn respond(conn: *net.tcp.Connection) !void {
+        if (readings.count > 1) {
+            var http_buf: [1460]u8 = undefined; // 1460 ipv4, 1440 ipv6
+
+            const reading_byte_len: usize = @divExact(@bitSizeOf(Reading), 8);
+            var readings_count = @min(
+                (http_buf.len - http_header.len - 8 - 8) / reading_byte_len,
+                readings.count,
+            );
+            var w = std.Io.Writer.fixed(&http_buf);
+            try w.print(http_header, .{
+                readings_count * reading_byte_len,
+                readings.last().?.ts,
+            });
+            var iter = readings.iterator();
+            while (iter.next()) |r| {
+                try w.writeStruct(r, .little);
+                readings_count -= 1;
+                if (readings_count == 0) break;
+            }
+
+            try conn.send(http_buf[0..w.end]);
+        } else {
+            try conn.send(http_ok);
+        }
     }
 
     fn on_connect(conn: *net.tcp.Connection) void {
@@ -208,6 +272,15 @@ const Session = struct {
         log.debug("{x} closed {}", .{ @intFromPtr(conn), err });
     }
 };
+
+const http_header =
+    "HTTP/1.1 200 OK\r\n" ++
+    "Content-Type: application/octet-stream\r\n" ++
+    "Content-Length: {d}\r\n" ++
+    "ETag: \"{x}\"\r\n" ++
+    "Access-Control-Allow-Origin: *\r\n" ++
+    "Connection: close\r\n" ++
+    "\r\n";
 
 const http_ok = "HTTP/1.1 200 OK\r\n" ++
     "Content-Length: 0\r\n" ++
@@ -220,15 +293,16 @@ var events: @import("atomic_ring_buffer.zig").AtomicRingBuffer(Event, 64) = .{};
 const Event = enum(u8) {
     net_irq,
     net_timeout,
-    temp_convert,
     temp_read,
-    sntp_time,
+    temp_converted,
+    time_synced,
+    reading_added,
 };
 
 fn onNetStatus(nic: *net.Interface, status: net.Interface.Status) void {
     _ = nic;
     log.debug("onNetStatus: {}", .{status});
     if (session_id == 0 and status.unix_time > 0) {
-        _ = events.push(.sntp_time);
+        _ = events.push(.time_synced);
     }
 }
