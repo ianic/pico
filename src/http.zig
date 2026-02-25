@@ -49,6 +49,8 @@ var session_id: u32 = 0;
 var reading_ts: u32 = 0;
 var readings: @import("ring_buffer.zig").CircularBuffer(Reading, 32 * 1024) = .{};
 
+const reading_byte_size: usize = @divExact(@bitSizeOf(Reading), 8);
+
 const Reading = packed struct {
     ts: u32,
     temp: u16,
@@ -130,7 +132,7 @@ pub fn main() !void {
     const ts: TempSensor = .init(pins.temp);
 
     //var sntp_ts = net.sntp.time.ts;
-    //pins.rel1.toggle();
+    //
     while (true) {
         while (events.pop()) |event| switch (event) {
             .net_irq, .net_timeout => {
@@ -149,7 +151,7 @@ pub fn main() !void {
                     log.err("temperature sensor read {}", .{err});
                     continue;
                 };
-                add_reading(temp, 0);
+                add_reading(temp >> 2, pins.rel1.read());
                 _ = events.push(.reading_added);
                 log.debug("external temp: {} {} {} {} {}", .{ f, temp, readings.last().?, readings.count, reading_ts });
                 pins.led.toggle();
@@ -176,6 +178,9 @@ pub fn main() !void {
                 udp.send(buf[0..w.end], sink) catch |err| {
                     log.err("udp send {}", .{err});
                 };
+            },
+            .toggle => {
+                pins.rel1.toggle();
             },
         };
 
@@ -231,45 +236,80 @@ const Session = struct {
     recv_bytes: usize = 0,
 
     fn on_recv(conn: *net.tcp.Connection, bytes: []u8) void {
-        log.debug("{x} recv {s}", .{ @intFromPtr(conn), bytes });
-        respond(conn) catch |err| {
-            log.err("respond: {}", .{err});
+        onRecv(conn, bytes) catch |err| {
+            log.err("http request {}", .{err});
         };
     }
 
-    fn respond(conn: *net.tcp.Connection) !void {
-        if (readings.count > 1) {
-            var http_buf: [1460]u8 = undefined; // 1460 ipv4, 1440 ipv6
-
-            const reading_byte_len: usize = @divExact(@bitSizeOf(Reading), 8);
-            var readings_count = @min(
-                (http_buf.len - http_header.len - 8 - 8) / reading_byte_len,
-                readings.count,
-            );
-            var w = std.Io.Writer.fixed(&http_buf);
-            try w.print(http_header, .{
-                readings_count * reading_byte_len,
-                readings.last().?.ts,
-            });
-            var iter = readings.iterator();
-            while (iter.next()) |r| {
-                try w.writeStruct(r, .little);
-                readings_count -= 1;
-                if (readings_count == 0) break;
-            }
-
-            try conn.send(http_buf[0..w.end]);
-        } else {
-            try conn.send(http_ok);
+    fn onRecv(conn: *net.tcp.Connection, bytes: []u8) !void {
+        const Head = @import("Head.zig");
+        const head: Head = try .parse(bytes);
+        if (head.target.len <= 1) {
+            // server root
         }
+        log.debug("{x} request {s}", .{ @intFromPtr(conn), head.target });
+        if (readings.count >= 1) {
+            if (std.mem.startsWith(u8, head.target, "/last")) {
+                return try last(conn);
+            }
+            if (std.mem.startsWith(u8, head.target, "/all")) {
+                return try all(conn);
+            }
+            if (std.mem.startsWith(u8, head.target, "/toggle")) {
+                _ = events.push(.toggle);
+            }
+        }
+        try conn.send(http_ok);
+    }
+
+    fn last(conn: *net.tcp.Connection) !void {
+        const reading = readings.last() orelse return;
+
+        var http_buf: [1460]u8 = undefined;
+        var w = std.Io.Writer.fixed(&http_buf);
+        try w.print(http_header, .{
+            1 * reading_byte_size,
+            reading.ts,
+        });
+        try w.writeStruct(reading, .little);
+        try conn.send(http_buf[0..w.end]);
+    }
+
+    fn all(conn: *net.tcp.Connection) !void {
+        if (readings.count <= 1) return;
+        var http_buf: [1460]u8 = undefined;
+
+        var readings_count = @min(
+            (http_buf.len - http_header.len - 8 - 8) / reading_byte_size,
+            readings.count,
+        );
+        var w = std.Io.Writer.fixed(&http_buf);
+        try w.print(http_header, .{
+            readings_count * reading_byte_size,
+            readings.last().?.ts,
+        });
+        var iter = readings.iterator();
+        while (iter.next()) |r| {
+            try w.writeStruct(r, .little);
+            readings_count -= 1;
+            if (readings_count == 0) break;
+        }
+
+        try conn.send(http_buf[0..w.end]);
     }
 
     fn on_connect(conn: *net.tcp.Connection) void {
-        log.debug("{x} connected", .{@intFromPtr(conn)});
+        _ = conn;
+        //log.debug("{x} connected", .{@intFromPtr(conn)});
     }
 
     fn on_close(conn: *net.tcp.Connection, err: net.Error) void {
-        log.debug("{x} closed {}", .{ @intFromPtr(conn), err });
+        switch (err) {
+            error.EndOfStream => {},
+            else => {
+                log.debug("{x} closed {}", .{ @intFromPtr(conn), err });
+            },
+        }
     }
 };
 
@@ -297,6 +337,7 @@ const Event = enum(u8) {
     temp_converted,
     time_synced,
     reading_added,
+    toggle,
 };
 
 fn onNetStatus(nic: *net.Interface, status: net.Interface.Status) void {
