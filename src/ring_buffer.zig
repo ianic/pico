@@ -30,7 +30,7 @@ pub fn CircularBuffer(comptime T: type, comptime len: usize) type {
             return (self.head + 1) % self.items.len;
         }
 
-        fn tail(self: Self) ?usize {
+        fn tail(self: *Self) ?usize {
             if (self.count == 0) return null;
             if (self.count <= self.items.len) return 0;
             return (self.head + 1) % self.items.len;

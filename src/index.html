@@ -49,7 +49,7 @@
              const flags = dv.getUint8(idx + 6, true);
              return {
                  time: unix * 1000,//new Date(unix * 1000),
-                 temp: temp / 4,
+                 temp: temp / 16,
                  relay: flags > 0,
              };
          }

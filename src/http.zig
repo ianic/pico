@@ -46,36 +46,65 @@ const timer = hal.system_timer.num(0);
 var wifi_driver: drivers.WiFi = .{};
 
 var session_id: u32 = 0;
-var reading_ts: u32 = 0;
-var readings: @import("ring_buffer.zig").CircularBuffer(Reading, 32 * 1024) = .{};
 
-const reading_byte_size: usize = @divExact(@bitSizeOf(Reading), 8);
+var readings: struct {
+    const Self = @This();
+
+    values: @import("ring_buffer.zig").CircularBuffer(Reading, 32 * 1024) = .{},
+    base_temp: u16 = 0,
+
+    pub fn add(self: *Self, temp: u16, relay: u1) void {
+        const ts = net.sntp.unix();
+
+        if (self.values.last()) |l| {
+            const in_range = (temp >= self.base_temp -| 1 and temp <= self.base_temp +| 1);
+            if (in_range and l.relay == relay) {
+                var upd = l;
+                upd.ts = ts;
+                self.values.update(upd);
+                return;
+            }
+        }
+        self.base_temp = temp;
+        self.values.add(.{
+            .ts = ts,
+            .temp = temp,
+            .relay = relay,
+        });
+    }
+
+    fn last(self: *Self) Reading {
+        if (self.values.last()) |l| {
+            return l;
+        }
+        return .empty;
+    }
+
+    // Number of readings which can fit into buffer, and content length of the
+    // filled part of the buffer.
+    fn fitInto(self: *Self, buf_len: usize) struct { usize, usize } {
+        const count = @min(
+            buf_len / Reading.byte_size,
+            self.values.count,
+        );
+        return .{ count, count * Reading.byte_size };
+    }
+
+    fn empty(self: *Self) bool {
+        return self.values.count <= 1;
+    }
+} = .{};
 
 const Reading = packed struct {
     ts: u32,
     temp: u16,
     relay: u1 = 0,
     _padding: u7 = 0,
+
+    const empty: Reading = .{ .ts = 0, .temp = 0 };
+
+    const byte_size: usize = @divExact(@bitSizeOf(Reading), 8);
 };
-
-pub fn add_reading(temp: u16, relay: u1) void {
-    const ts = net.sntp.unix();
-    reading_ts = ts;
-
-    if (readings.last()) |last| {
-        if (last.temp == temp and last.relay == relay) {
-            var upd = last;
-            upd.ts = ts;
-            readings.update(upd);
-            return;
-        }
-    }
-    readings.add(.{
-        .ts = ts,
-        .temp = temp,
-        .relay = relay,
-    });
-}
 
 pub fn main() !void {
     const pins = pin_config.apply();
@@ -151,14 +180,14 @@ pub fn main() !void {
                     log.err("temperature sensor read {}", .{err});
                     continue;
                 };
-                add_reading(temp >> 2, pins.rel1.read());
+                readings.add(temp, pins.rel1.read());
                 _ = events.push(.reading_added);
-                log.debug("external temp: {} {} {} {} {}", .{ f, temp, readings.last().?, readings.count, reading_ts });
+                log.debug("external temp: {} {} {} {}", .{ f, temp, readings.last(), readings.values.count });
                 pins.led.toggle();
             },
             .time_synced => {
                 session_id = net.sntp.unix();
-                add_reading(0, 0);
+                readings.add(0, 0);
                 _ = events.push(.temp_read);
             },
             .temp_read => {
@@ -171,7 +200,7 @@ pub fn main() !void {
                 var buf: [1472]u8 = undefined;
                 var w = std.io.Writer.fixed(&buf);
 
-                var iter = readings.iterator();
+                var iter = readings.values.iterator();
                 while (iter.next()) |r| {
                     w.writeStruct(r, .little) catch break;
                 }
@@ -248,7 +277,7 @@ const Session = struct {
             // server root
         }
         log.debug("{x} request {s}", .{ @intFromPtr(conn), head.target });
-        if (readings.count >= 1) {
+        if (!readings.empty()) {
             if (std.mem.startsWith(u8, head.target, "/last")) {
                 return try last(conn);
             }
@@ -263,12 +292,12 @@ const Session = struct {
     }
 
     fn last(conn: *net.tcp.Connection) !void {
-        const reading = readings.last() orelse return;
+        const reading = readings.last();
 
-        var http_buf: [1460]u8 = undefined;
+        var http_buf: [512]u8 = undefined;
         var w = std.Io.Writer.fixed(&http_buf);
         try w.print(http_header, .{
-            1 * reading_byte_size,
+            1 * Reading.byte_size,
             reading.ts,
         });
         try w.writeStruct(reading, .little);
@@ -276,23 +305,22 @@ const Session = struct {
     }
 
     fn all(conn: *net.tcp.Connection) !void {
-        if (readings.count <= 1) return;
+        if (readings.empty()) return;
         var http_buf: [1460]u8 = undefined;
 
-        var readings_count = @min(
-            (http_buf.len - http_header.len - 8 - 8) / reading_byte_size,
-            readings.count,
-        );
+        var count, const content_len =
+            readings.fitInto(http_buf.len - http_header.len - 8 - 8);
+
         var w = std.Io.Writer.fixed(&http_buf);
         try w.print(http_header, .{
-            readings_count * reading_byte_size,
-            readings.last().?.ts,
+            content_len,
+            readings.last().ts,
         });
-        var iter = readings.iterator();
+        var iter = readings.values.iterator();
         while (iter.next()) |r| {
             try w.writeStruct(r, .little);
-            readings_count -= 1;
-            if (readings_count == 0) break;
+            count -= 1;
+            if (count == 0) break;
         }
 
         try conn.send(http_buf[0..w.end]);
