@@ -51,15 +51,15 @@
             <div class="border p-2 card mb-2">
                 <div class="row mb-2 g-1">
                     <div class="col-md-4">
-                        <label for="validationCustom01" class="form-label">interval from</label>
+                        <label class="form-label">interval from</label>
                         <select class="form-select" id="select-from" onchange="selectChange(this)"></select>
                     </div>
                     <div class="col-md-4">
-                        <label for="validationCustom02" class="form-label">interval to</label>
+                        <label class="form-label">interval to</label>
                         <select class="form-select" id="select-to" onchange="selectChange(this)"></select>
                     </div>
                     <div class="col-md-4">
-                        <label for="validationCustomUsername" class="form-label">temperature</label>
+                        <label class="form-label">temperature</label>
                         <div class="input-group">
                             <select class="form-select" id="select-temp"></select>                
                             <span class="input-group-text">°C</span>
@@ -73,20 +73,118 @@
                 </div>
                 
             </div>
-            
+
+            <div>
+                <svg id="chart" width="100%" height="200"></svg>
+            </div>
 
             <div class="mt-3">
                 <button id="button" type="button" class="btn btn-primary btn-lg" onclick="onButton(this)"></button>
             </div>
         </div>
-        
-        
 
         
-
         
         <script>
+         const drawGraph = (intervals) => {
+             const svgElementId = "chart"
+             const element = document.getElementById(svgElementId);
+             element.innerHTML = "";
+             
+             // Transform to stepped line data points
+             const data = intervals.flatMap(d => [{x: d.from, y: d.temp}]);
+             const last = intervals[intervals.length-1];
+             data.push({x: last.to, y: last.temp});
 
+             const margin = {top: 20, right: 5, bottom: 40, left: 20};
+             const width = element.clientWidth - margin.left - margin.right;
+             const height = 200 - margin.top - margin.bottom;
+
+             const svg = d3.select("#" + svgElementId)
+                           .append("g")
+                           .attr("transform", `translate(${margin.left},${margin.top})`);
+
+             const x = d3.scaleLinear()
+                         .domain([0, 144])
+                         .range([0, width]);
+
+             const y = d3.scaleLinear()
+                         .domain([d3.min(data, d => d.y), d3.max(data, d => d.y)])
+                         .range([height, 0]);
+
+             // Stepped line generator (step-after)
+             const line = d3.line()
+                            .x(d => x(d.x))
+                            .y(d => y(d.y))
+                            .curve(d3.curveStepAfter);  // horizontal then vertical
+
+             // Draw line
+             svg.append("path")
+                .datum(data)
+                .attr("fill", "none")
+                .attr("stroke", "steelblue")
+                .attr("stroke-width", 2)
+                .attr("d", line);
+
+             // Draw points
+             svg.selectAll("circle")
+                .data(data)
+                .enter().append("circle")
+                .attr("cx", d => x(d.x))
+                .attr("cy", d => y(d.y))
+                .attr("r", 3)
+                .attr("fill", "steelblue")
+                .attr("stroke", "white")
+                .attr("stroke-width", 2);             
+
+             const xAxis = d3.axisBottom(x)
+                             .tickValues(data.flatMap(d => d.x))
+                             .tickFormat( (d, i) => formatLabel(d) );
+             
+             const yAxis = d3.axisLeft(y)
+                             .tickValues([... new Set(data.flatMap(d => d.y))])
+                             .tickFormat(d3.format("d"));  
+             
+             // Axes
+             svg.append("g")    
+                .attr("transform", `translate(0,${height})`)
+                .call(xAxis)
+             // grid lines
+                .call(g => g.select(".domain").remove())
+                .call(g => g.selectAll(".tick line").clone()
+                            .attr("y2", -height)
+                            .attr("stroke-opacity", 0.1))
+             // labels
+                .selectAll("text")
+                .attr("dx", "-2em")
+                .attr("transform", "rotate(-45)");
+
+
+             svg.append("g")
+                .call(yAxis)
+             // grid lines
+                .call(g => g.select(".domain").remove())
+                .call(g => g.selectAll(".tick line").clone()
+                            .attr("x2", width)
+                            .attr("stroke-opacity", 0.1));
+
+             // Rectangle for getting clicks
+             svg.append("rect")
+                .attr("width", width)
+                .attr("height", height)
+                .style("fill", "none")
+                .style("pointer-events", "all")
+                .on("click", function(event) {
+                    // Get mouse coordinates relative to the chart
+                    const [mx, my] = d3.pointer(event);                    
+                    // Invert X coordinate to data value
+                    const xValue = parseInt(x.invert(mx));
+                    const yValue = parseInt(y.invert(my));
+                    graphSelect(xValue, yValue);
+                });
+
+         }
+         
          function formatTemplate(template, values) {
              return template.replace(/\$\{(\w+)\}/g, (match, key) => values[key] ?? match);
          }
@@ -96,6 +194,16 @@
              const min = (value - hour * 6) * 10;
              const label = `${hour.toString().padStart(2, '0')}:${min.toString().padStart(2, '0')}`;
              return label;
+         }
+
+         const graphSelect = (x, y) => {
+             for (var i = 0; i < setting.intervals.length; i++) {
+                 const interval = setting.intervals[i];
+                 if (interval.from <= x && interval.to >= x) {
+                     selectRow(i);
+                     break;
+                 }
+             }
          }
 
          const selectRow = (idx) => {
@@ -129,17 +237,21 @@
                  });
                  tbody.insertAdjacentHTML('beforeend', html);    
              }
+             
+             drawGraph(setting.intervals);
          }
 
          let setting = {
              name: "default",
              base: 15,
              intervals: [
-                 //{from: 39, to: 135, temp: 21},
-                 {from: 0, to: 144, temp: 15},
+                 {from: 0, to: 39, temp: 15},
+                 {from: 39, to: 135, temp: 21},
+                 {from: 135, to: 144, temp: 15},
              ],             
          };
          show(setting);
+         selectRow(1);
 
          const selectChange = (button) => {
              const $from = document.getElementById('select-from');
@@ -149,11 +261,11 @@
              const fromValue = parseInt($from.value);
              const toValue = parseInt($to.value);
 
-             if (toValue <= fromValue) {
+             if (toValue <= (fromValue + 3)) {
                  if (button == $from) {
-                     $to.value = fromValue + 1;
+                     $to.value = fromValue + 3;
                  } else {
-                     $from.value = toValue - 1;
+                     $from.value = toValue - 3;
                  }
              }
 
@@ -219,10 +331,10 @@
                  const min = (i - hour * 6) * 10;
                  const label = `${hour.toString().padStart(2, '0')}:${min.toString().padStart(2, '0')}`;
 
-                 if (i > 0) {
+                 if (i > 2) {
                      selectTo.add(new Option(label, i));
                  }
-                 if (i < 144) {
+                 if (i < 142) {
                      selectFrom.add(new Option(label, i));
                  }
              }
@@ -260,10 +372,14 @@
          const getLast = () => {
              fetch('http://pico.lan/last')
                  .then(response => response.arrayBuffer())
-                 .then(buffer => {                     
+                 .then(buffer => {
                      updateCurrent(buffer);
                      setTimeout(getLast, 5000);
-                 });                                 
+                 })
+                 .catch(error => {
+                     console.error('Fetch failed:', error);
+                     setTimeout(getLast, 5000);
+                 });
          }
 
          const updateCurrent = (buffer) => {
@@ -300,117 +416,7 @@
                      }
                      console.log(readings);                     
                  });
-         }         
+         }
         </script>
-
-        <div class="row">
-            <p>pero</p>
-            <svg id="chart" width="800" height="400"></svg>
-        </div>
-
-
-        <script>
-
-         const data = [
-             {
-                 "from": 0,
-                 "to": 42,
-                 "temp": 15
-             },
-             {
-                 "from": 42,
-                 "to": 48,
-                 "temp": 21
-             },
-             {
-                 "from": 48,
-                 "to": 102,
-                 "temp": 18
-             },
-             {
-                 "from": 102,
-                 "to": 129,
-                 "temp": 21
-             },
-             {
-                 "from": 129,
-                 "to": 130,
-                 "temp": 29
-             },
-             {
-                 "from": 130,
-                 "to": 135,
-                 "temp": 21
-             },
-             {
-                 "from": 135,
-                 "to": 144,
-                 "temp": 15
-             }
-         ];
-
-         
-
-             // Declare the chart dimensions and margins.
-             const width = 928;
-             const height = 500;
-             const marginTop = 20;
-             const marginRight = 30;
-             const marginBottom = 30;
-             const marginLeft = 40;
-
-         // Declare the x (horizontal position) scale.
-         const x = d3.scaleBand()
-                     .domain(data.map(d => d.from))
-                     .range([0, width])
-                     .padding(0.05);
-
-         // Declare the y (vertical position) scale.
-         const y = d3.scaleLinear([10, 30], [height - marginBottom, marginTop]);
-
-             // Declare the line generator.
-             const line = d3.line()
-                            .x(d => x(d.date))
-                            .y(d => y(d.close));
-
-             // Create the SVG container.
-             const svg = d3.create("svg")
-                           .attr("width", width)
-                           .attr("height", height)
-                           .attr("viewBox", [0, 0, width, height])
-                           .attr("style", "max-width: 100%; height: auto; height: intrinsic;");
-
-             // Add the x-axis.
-             svg.append("g")
-                .attr("transform", `translate(0,${height - marginBottom})`)
-                .call(d3.axisBottom(x).ticks(width / 80).tickSizeOuter(0));
-
-             // Add the y-axis, remove the domain line, add grid lines and a label.
-             svg.append("g")
-                .attr("transform", `translate(${marginLeft},0)`)
-                .call(d3.axisLeft(y).ticks(height / 40))
-                .call(g => g.select(".domain").remove())
-                .call(g => g.selectAll(".tick line").clone()
-                            .attr("x2", width - marginLeft - marginRight)
-                            .attr("stroke-opacity", 0.1))
-                .call(g => g.append("text")
-                            .attr("x", -marginLeft)
-                            .attr("y", 10)
-                            .attr("fill", "currentColor")
-                            .attr("text-anchor", "start")
-                            .text("↑ Daily close ($)"));
-
-             // Append a path for the line.
-             svg.append("path")
-                .attr("fill", "none")
-                .attr("stroke", "steelblue")
-                .attr("stroke-width", 1.5)
-                .attr("d", line(data));
-
-            //return svg.node();
-
-
-        </script>
-        
     </body>
 </html>
