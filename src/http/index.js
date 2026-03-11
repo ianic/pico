@@ -14,6 +14,7 @@ const showPage = (page) => {
     const container = (page) => {
         const $home = document.getElementById('home-container');
         const $edit = document.getElementById('edit-container');
+        const $profiles = document.getElementById('profiles-container');
         const $set = document.getElementById('set-container');
         const $current = document.getElementById(page + '-container'); 
         if (!$current) return;
@@ -21,6 +22,7 @@ const showPage = (page) => {
         $home.style.display = 'none';
         $edit.style.display = 'none';
         $set.style.display = 'none';
+        $profiles.style.display = 'none';
         $current.style.display = 'block';
     }
     container(page);
@@ -29,7 +31,8 @@ const showPage = (page) => {
     const title = (page) => {
         switch (page) {
         case "set": return "Pico - Set Profile";
-        case "edit": return "Pico - Edit Profiles";
+        case "profiles": return "Pico - Profiles";
+        case "edit": return "Pico - Edit Profile";
         default: return "Pico";
         }
     }
@@ -37,14 +40,19 @@ const showPage = (page) => {
 
     // set active link
     const link = (page) => {
+        if (page == 'edit') {
+            return;  
+        } 
         const $home = document.getElementById('home-link');
-        const $edit = document.getElementById('edit-link');
+        //const $edit = document.getElementById('edit-link');
         const $set = document.getElementById('set-link');
+        const $profiles = document.getElementById('profiles-link');
         let $current = document.getElementById(page + '-link'); 
         
         $home.classList.remove("active");
-        $edit.classList.remove("active");
+        //$edit.classList.remove("active");
         $set.classList.remove("active");
+        $profiles.classList.remove("active");
         $current.classList.add("active");
     }
     link(page);
@@ -176,8 +184,9 @@ const formatLabel = (value) => {
 }
 
 const graphSelect = (x, y) => {
-    for (var i = 0; i < setting.intervals.length; i++) {
-        const interval = setting.intervals[i];
+    const profile = currentProfile;
+    for (var i = 0; i < profile.intervals.length; i++) {
+        const interval = profile.intervals[i];
         if (interval.from <= x && interval.to >= x) {
             selectRow(i);
             break;
@@ -186,7 +195,7 @@ const graphSelect = (x, y) => {
 }
 
 const selectRow = (idx) => {
-    const interval = setting.intervals[idx];
+    const interval = currentProfile.intervals[idx];
 
     const $from = document.getElementById('select-from');
     const $to = document.getElementById('select-to');
@@ -197,17 +206,21 @@ const selectRow = (idx) => {
     $temp.value = interval.temp;
 }
 
-function show(setting) {
+function showProfile() {
+    const profile = currentProfile;
+    const $name = document.getElementById('profile-name');
+    $name.value = profile.name;
+    
     // clear table
-    const table = document.getElementById('settings-table');
+    const table = document.getElementById('intervals-table');
     while (table.rows.length > 2) {
         table.deleteRow(-1);  // -1 = last row
     }
     
-    const tbody = document.querySelector('#settings-table tbody');
+    const tbody = document.querySelector('#intervals-table tbody');
     const rowTemplate = document.getElementById('row-template');
-    for (let i=0; i<setting.intervals.length; i+=1) {             
-        const row = setting.intervals[i];
+    for (let i=0; i<profile.intervals.length; i+=1) {             
+        const row = profile.intervals[i];
         const html = formatTemplate(rowTemplate.innerHTML, {
             from: formatLabel(row.from),
             to: formatLabel(row.to),
@@ -217,20 +230,104 @@ function show(setting) {
         tbody.insertAdjacentHTML('beforeend', html);    
     }
     
-    drawGraph(setting.intervals);
+    drawGraph(profile.intervals);
 }
 
-let setting = {
-    name: "default",
-    base: 15,
-    intervals: [
-        {from: 0, to: 39, temp: 15},
-        {from: 39, to: 135, temp: 21},
-        {from: 135, to: 144, temp: 15},
-    ],             
-};
-show(setting);
-selectRow(1);
+let profiles = [
+    {
+        name: "away",
+        intervals: [
+            {from: 0, to: 144, temp: 10}
+        ]
+    },
+    {
+        "name": "work from office",
+        "intervals": [
+            {
+                "from": 0,
+                "to": 39,
+                "temp": 15
+            },
+            {
+                "from": 39,
+                "to": 45,
+                "temp": 21
+            },
+            {
+                "from": 45,
+                "to": 99,
+                "temp": 18
+            },
+            {
+                "from": 99,
+                "to": 120,
+                "temp": 20
+            },
+            {
+                "from": 120,
+                "to": 135,
+                "temp": 22
+            },
+            {
+                "from": 135,
+                "to": 144,
+                "temp": 15
+            }
+        ]
+    },
+    {
+        name: "work from home",
+        intervals: [
+            {from: 0, to: 45, temp: 15},  
+            {from: 45, to: 99, temp: 21},
+            {
+                "from": 99,
+                "to": 120,
+                "temp": 20
+            },
+            {
+                "from": 120,
+                "to": 135,
+                "temp": 22
+            },
+            {
+                "from": 135,
+                "to": 144,
+                "temp": 15
+            }            
+        ],
+    },
+    {
+        "name": "weekend",
+        "intervals": [
+            {
+                "from": 0,
+                "to": 45,
+                "temp": 15
+            },
+            {
+                "from": 45,
+                "to": 120,
+                "temp": 21
+            },
+            {
+                "from": 120,
+                "to": 132,
+                "temp": 22
+            },
+            {
+                "from": 132,
+                "to": 138,
+                "temp": 20
+            },
+            {
+                "from": 138,
+                "to": 144,
+                "temp": 19
+            }
+        ]
+    }
+];
 
 const selectChange = (button) => {
     const $from = document.getElementById('select-from');
@@ -251,7 +348,7 @@ const selectChange = (button) => {
     $add.disabled = !(parseInt($from.value) < parseInt($to.value));
 }
 
-const settingAdd = (button) => {
+const intervalAdd = (button) => {
     const $from = document.getElementById('select-from');
     const $to = document.getElementById('select-to');
     const $temp = document.getElementById('select-temp');
@@ -265,8 +362,7 @@ const settingAdd = (button) => {
     if (newRow.from >= newRow.to) {
         return;
     }
-    console.log(newRow);
-    let intervals = setting.intervals;
+    let intervals = currentProfile.intervals;
 
     for (let i=0; i < intervals.length; i+=1) {             
         let row = intervals[i];
@@ -295,9 +391,9 @@ const settingAdd = (button) => {
     };
     
     intervals.push(newRow);             
-    setting.intervals = intervals.sort((a, b) => a.from - b.from);;
+    currentProfile.intervals = intervals.sort((a, b) => a.from - b.from);;
     
-    show(setting);
+    showProfile();
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -396,3 +492,14 @@ const getAll = () => {
             console.log(readings);                     
         });
 }
+
+const edit = (profile) => {
+    currentProfile = profile;
+    showPage('edit');
+    showProfile();
+    selectRow(1);
+}
+
+let currentProfile = null;
+
+edit(profiles[3]);

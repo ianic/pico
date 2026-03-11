@@ -6,8 +6,7 @@
         <link rel="icon" type="image/png" href="thermoemeter.png">
         
         <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB" crossorigin="anonymous">
-        <script defer src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js"></script>
-        
+        <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js"></script>        
         <script src="https://d3js.org/d3.v7.min.js"></script>
         
         <style>
@@ -22,10 +21,12 @@
          .active {
              color: tomato;
          }
+
+         
         </style>
     </head>
     <body>
-        <nav class="navbar navbar-expand-lg bg-body-tertiary">
+        <nav class="navbar navbar-expand-lg bg-body-tertiary mb-4">
             <div class="container-fluid">
                 <a class="navbar-brand" href="#" onclick="navigatePage('home'); return false;"> 
                     <img src="thermoemeter.png" alt="Logo" width="32" height="32" class="d-inline-block align-text-top">
@@ -38,7 +39,7 @@
                     <div class="navbar-nav">
                         <a id="home-link" class="nav-link" href="#" onclick="navigatePage('home'); return false;">Home</a>
                         <a id="set-link"  class="nav-link" href="#" onclick="navigatePage('set'); return false;">Set Profile</a>
-                        <a id="edit-link" class="nav-link" href="#" onclick="navigatePage('edit'); return false;">Edit Profiles</a>
+                        <a id="profiles-link" class="nav-link" href="#" onclick="navigatePage('profiles'); return false;">Profiles</a>
                     </div>
                 </div>
             </div>
@@ -47,13 +48,64 @@
         <div id="home-container" class="container" style="display:block">
             <div id="value" class="temp"></div>
             <div id="desc"></div>
+            <div class="mt-3">
+                <button id="button" type="button" class="btn btn-primary btn-lg" onclick="onButton(this)"></button>
+            </div>
+        </div>
+
+        <div id="set-container" class="container" style="display:none">
+            profile set
+        </div>
+        <div id="profiles-container" class="container" style="display:none">
+            profiles
+        </div>
+        
+        <div id="edit-container" class="container" style="display:none">
+            <div class="mb-4">
+                <svg id="chart" width="100%" height="200"></svg>
+            </div>
+            
+              <div class="input-group mb-3">
+                  <span class="input-group-text">Profile</span>
+                  <input type="text" class="form-control" placeholder="..." id="profile-name">
+              </div>
+
+              
+            <div class="border p-2 card mb-2">
+                <p>Target temperature interval
+                    
+                </p>
+                <div class="row mb-2 g-1">
+                    <div class="col-md-4 input-group">
+                        <span class="input-group-text" style="min-width: 65px;">From</span>
+                        <select class="form-select" id="select-from" onchange="selectChange(this)"></select>
+                    </div>
+                    <div class="col-md-4 input-group">
+                        <span class="input-group-text" style="min-width: 65px;">To</span>
+                        <select class="form-select" id="select-to" onchange="selectChange(this)"></select>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="input-group">
+                            <span class="input-group-text">Temperature</span>
+                            <select class="form-select" id="select-temp"></select>                
+                            <span class="input-group-text">°C</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="row mb-2">
+                    <div class="col text-end">
+                        <button id="add" type="button" class="btn btn-primary" onclick="intervalAdd(this)">Add</button>
+                    </div>
+                </div>
+                <small class="text-muted">Click on the graph above or on the tabel below to edit existing interval.</small>
+            </div>
 
             <div class="border p-2 card mb-2">
-                <table class="table align-middle table-hover" id="settings-table">
+                <table class="table align-middle table-hover" id="intervals-table">
                     <thead>
                         <tr>
-                            <th scope="col" class="text-center">from</th>
-                            <th scope="col" class="text-center">to</th>
+                            <th scope="col" class="text-center">From</th>
+                            <th scope="col" class="text-center">To</th>
                             <th scope="col" class="text-center">°C</th>
                             <th scope="col" class="text-center"></th>
                         </tr>
@@ -70,48 +122,9 @@
                     </tbody>
                 </table>
             </div>
-
-            <div class="border p-2 card mb-2">
-                <div class="row mb-2 g-1">
-                    <div class="col-md-4">
-                        <label class="form-label">interval from</label>
-                        <select class="form-select" id="select-from" onchange="selectChange(this)"></select>
-                    </div>
-                    <div class="col-md-4">
-                        <label class="form-label">interval to</label>
-                        <select class="form-select" id="select-to" onchange="selectChange(this)"></select>
-                    </div>
-                    <div class="col-md-4">
-                        <label class="form-label">temperature</label>
-                        <div class="input-group">
-                            <select class="form-select" id="select-temp"></select>                
-                            <span class="input-group-text">°C</span>
-                        </div>
-                    </div>
-                </div>
-                <div class="row">
-                    <div class="col text-end">
-                        <button id="add" type="button" class="btn btn-primary" onclick="settingAdd(this)">Add</button>
-                    </div>
-                </div>
-                
-            </div>
-
-            <div>
-                <svg id="chart" width="100%" height="200"></svg>
-            </div>
-
-            <div class="mt-3">
-                <button id="button" type="button" class="btn btn-primary btn-lg" onclick="onButton(this)"></button>
-            </div>
+                        
         </div>
-
-        <div id="edit-container" class="container" style="display:none">
-            profile editor
-        </div>
-        <div id="set-container" class="container" style="display:none">
-            profile set
-        </div>
+        
 
         <script src="index.js"></script>
     </body>
