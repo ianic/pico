@@ -234,6 +234,7 @@ function showProfile() {
     }
     
     drawGraph(profile.intervals);
+    editUpdateDirty();
 }
 
 let profiles = [
@@ -393,9 +394,9 @@ const intervalAdd = (button) => {
         }
     };
     
-    intervals.push(newRow);             
-    currentProfile.intervals = intervals.sort((a, b) => a.from - b.from);;
-    
+    intervals.push(newRow);
+    currentProfile.intervals = intervals.sort((a, b) => a.from - b.from);
+
     showProfile();
 }
 
@@ -503,19 +504,43 @@ const showProfiles = () => {
         const svgId = `profile-chart-${i}`;
         const card = document.createElement('div');
         card.className = 'mb-4';
-        card.innerHTML = `<h5 class="text-capitalize">${profile.name}</h5><svg id="${svgId}" width="100%" height="200"></svg>`;
+        card.innerHTML = `<h5 class="text-capitalize">${profile.name}</h5><svg id="${svgId}" width="100%" height="200" style="cursor:pointer"></svg>`;
         container.appendChild(card);
         drawGraph(profile.intervals, svgId, false);
+        card.querySelector('svg').addEventListener('click', () => edit(profile, i));
     });
 }
 
-const edit = (profile) => {
-    currentProfile = profile;
-    showPage('edit');
-    showProfile();
-    selectRow(profile.intervals.length > 1 ? 1 : 0);
+let currentProfile = null;
+let currentProfileIndex = null;
+let editSnapshot = null;
+
+const editIsDirty = () => {
+    const name = document.getElementById('profile-name').value;
+    return JSON.stringify({name, intervals: currentProfile.intervals}) !== editSnapshot;
 }
 
-let currentProfile = null;
+const editUpdateDirty = () => {
+    document.getElementById('edit-update').disabled = !editIsDirty();
+}
 
-edit(profiles[3]);
+const editBack = () => {
+    navigatePage('profiles');
+}
+
+const editUpdate = () => {
+    currentProfile.name = document.getElementById('profile-name').value;
+    profiles[currentProfileIndex] = JSON.parse(JSON.stringify(currentProfile));
+    navigatePage('profiles');
+}
+
+const edit = (profile, index) => {
+    currentProfileIndex = index;
+    currentProfile = JSON.parse(JSON.stringify(profile));
+    editSnapshot = JSON.stringify({name: profile.name, intervals: profile.intervals});
+    showPage('edit');
+    showProfile();
+    selectRow(currentProfile.intervals.length > 1 ? 1 : 0);
+}
+
+edit(profiles[3], 3);

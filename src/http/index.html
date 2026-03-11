@@ -67,7 +67,7 @@
             
               <div class="input-group mb-3">
                   <span class="input-group-text">Profile</span>
-                  <input type="text" class="form-control" placeholder="..." id="profile-name">
+                  <input type="text" class="form-control" placeholder="..." id="profile-name" oninput="editUpdateDirty()">
               </div>
 
               
@@ -98,6 +98,11 @@
                     </div>
                 </div>
                 <small class="text-muted">Click on the graph above or on the tabel below to edit existing interval.</small>
+            </div>
+
+            <div class="d-flex gap-2 mb-3">
+                <button type="button" class="btn btn-secondary" onclick="editBack()">Back</button>
+                <button type="button" class="btn btn-primary" id="edit-update" onclick="editUpdate()" disabled>Update</button>
             </div>
 
             <div class="border p-2 card mb-2">
