@@ -27,6 +27,8 @@ const showPage = (page) => {
     }
     container(page);
 
+    if (page === 'profiles') showProfiles();
+
     // set page title
     const title = (page) => {
         switch (page) {
@@ -73,8 +75,7 @@ window.onpopstate = (event) => {
 };
 
 
-const drawGraph = (intervals) => {
-    const svgElementId = "chart"
+const drawGraph = (intervals, svgElementId = "chart", interactive = true) => {
     const element = document.getElementById(svgElementId);
     element.innerHTML = "";
     
@@ -155,20 +156,22 @@ const drawGraph = (intervals) => {
               .attr("x2", width)
               .attr("stroke-opacity", 0.1));
 
-    // Rectangle for getting clicks
-    svg.append("rect")
-        .attr("width", width)
-        .attr("height", height)
-        .style("fill", "none")
-        .style("pointer-events", "all")
-        .on("click", function(event) {
-            // Get mouse coordinates relative to the chart
-            const [mx, my] = d3.pointer(event);                    
-            // Invert X coordinate to data value
-            const xValue = parseInt(x.invert(mx));
-            const yValue = parseInt(y.invert(my));
-            graphSelect(xValue, yValue);
-        });
+    if (interactive) {
+        // Rectangle for getting clicks
+        svg.append("rect")
+            .attr("width", width)
+            .attr("height", height)
+            .style("fill", "none")
+            .style("pointer-events", "all")
+            .on("click", function(event) {
+                // Get mouse coordinates relative to the chart
+                const [mx, my] = d3.pointer(event);
+                // Invert X coordinate to data value
+                const xValue = parseInt(x.invert(mx));
+                const yValue = parseInt(y.invert(my));
+                graphSelect(xValue, yValue);
+            });
+    }
 
 }
 
@@ -234,12 +237,6 @@ function showProfile() {
 }
 
 let profiles = [
-    {
-        name: "away",
-        intervals: [
-            {from: 0, to: 144, temp: 10}
-        ]
-    },
     {
         "name": "work from office",
         "intervals": [
@@ -325,6 +322,12 @@ let profiles = [
                 "to": 144,
                 "temp": 19
             }
+        ]
+    },
+    {
+        name: "away",
+        intervals: [
+            {from: 0, to: 144, temp: 10}
         ]
     }
 ];
@@ -493,11 +496,24 @@ const getAll = () => {
         });
 }
 
+const showProfiles = () => {
+    const container = document.getElementById('profiles-container');
+    container.innerHTML = '';
+    profiles.forEach((profile, i) => {
+        const svgId = `profile-chart-${i}`;
+        const card = document.createElement('div');
+        card.className = 'mb-4';
+        card.innerHTML = `<h5 class="text-capitalize">${profile.name}</h5><svg id="${svgId}" width="100%" height="200"></svg>`;
+        container.appendChild(card);
+        drawGraph(profile.intervals, svgId, false);
+    });
+}
+
 const edit = (profile) => {
     currentProfile = profile;
     showPage('edit');
     showProfile();
-    selectRow(1);
+    selectRow(profile.intervals.length > 1 ? 1 : 0);
 }
 
 let currentProfile = null;
