@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<svg id="chart" width="600" height="200"></svg>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<script>
+ 
+ const formatLabel = (value) => {
+     const hour = Math.floor(value / 6);
+     const min = (value - hour * 6) * 10;
+     const label = `${hour.toString().padStart(2, '0')}:${min.toString().padStart(2, '0')}`;
+     return label;
+ }
+ 
+ const drawGraph = (intervals) => {
+     // Transform to stepped line data points
+     const data = intervals.flatMap(d => [{x: d.from, y: d.temp}]);
+     const last = intervals[intervals.length-1];
+     data.push({x: last.to, y: last.temp});
+
+     const margin = {top: 20, right: 5, bottom: 40, left: 20};
+     const width = 600 - margin.left - margin.right;
+     const height = 200 - margin.top - margin.bottom;
+
+     const svg = d3.select("#chart")
+                   .append("g")
+                   .attr("transform", `translate(${margin.left},${margin.top})`);
+
+     const x = d3.scaleLinear()
+                 .domain([0, 144])
+                 .range([0, width]);
+
+     const y = d3.scaleLinear()
+                 .domain([d3.min(data, d => d.y), d3.max(data, d => d.y)])
+                 .range([height, 0]);
+
+     // Stepped line generator (step-after)
+     const line = d3.line()
+                    .x(d => x(d.x))
+                    .y(d => y(d.y))
+                    .curve(d3.curveStepAfter);  // horizontal then vertical
+
+     // Draw line
+     svg.append("path")
+        .datum(data)
+        .attr("fill", "none")
+        .attr("stroke", "steelblue")
+        .attr("stroke-width", 2)
+        .attr("d", line);
+
+     // Draw points
+     svg.selectAll("circle")
+        .data(data)
+        .enter().append("circle")
+        .attr("cx", d => x(d.x))
+        .attr("cy", d => y(d.y))
+        .attr("r", 3)
+        .attr("fill", "steelblue")
+        .attr("stroke", "white")
+        .attr("stroke-width", 2);
+
+     const xAxis = d3.axisBottom(x)
+                     .tickValues(data.flatMap(d => d.x))
+                     .tickFormat( (d, i) => formatLabel(d) );
+     
+     const yAxis = d3.axisLeft(y)
+                     .tickValues([... new Set(data.flatMap(d => d.y))])
+                     .tickFormat(d3.format("d"));  
+     
+     // Axes
+     svg.append("g")    
+        .attr("transform", `translate(0,${height})`)
+        .call(xAxis)
+     // grid lines
+        .call(g => g.select(".domain").remove())
+        .call(g => g.selectAll(".tick line").clone()
+                    .attr("y2", -height)
+                    .attr("stroke-opacity", 0.1))
+     // labels
+        .selectAll("text")
+        .attr("dx", "-2em")
+        .attr("transform", "rotate(-45)");
+
+
+     svg.append("g")
+        .call(yAxis)
+     // grid lines
+        .call(g => g.select(".domain").remove())
+        .call(g => g.selectAll(".tick line").clone()
+                    .attr("x2", width)
+                    .attr("stroke-opacity", 0.1));
+     
+ }
+
+ const intervals = [
+     {from: 0, to: 42, temp: 15},
+     {from: 42, to: 48, temp: 21},
+     {from: 48, to: 102, temp: 18},
+     {from: 102, to: 129, temp: 21},
+     {from: 129, to: 130, temp: 21},
+     {from: 130, to: 135, temp: 21},
+     {from: 135, to: 144, temp: 15}
+ ];
+
+ drawGraph(intervals);
+</script>
+
