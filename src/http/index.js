@@ -27,7 +27,9 @@ const showPage = (page) => {
     }
     container(page);
 
+    if (page === 'home') showHome();
     if (page === 'profiles') showProfiles();
+    if (page === 'set') showSet();
 
     // set page title
     const title = (page) => {
@@ -425,6 +427,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     selectTemp.value = 21;
     
     getLast();
+    showHome();
 });
 
 const onButton = (button) => {
@@ -497,6 +500,65 @@ const getAll = () => {
         });
 }
 
+const getCurrentProfile = () => {
+    const day = new Date().getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
+    switch (schedule.mode) {
+        case 'fixed':
+            return profiles[schedule.fixed];
+        case 'workday-weekend':
+            return (day >= 1 && day <= 5) ? profiles[schedule.workday] : profiles[schedule.weekend];
+        case 'daily': {
+            const idx = day === 0 ? 6 : day - 1; // map to 0=Mon..6=Sun
+            return profiles[schedule.daily[idx]];
+        }
+    }
+}
+
+const showHome = () => {
+    const profile = getCurrentProfile();
+    document.getElementById('home-profile-name').textContent = profile.name;
+    drawGraph(profile.intervals, 'home-chart', false);
+}
+
+let schedule = {
+    "mode": "daily",
+    "fixed": 3,
+    "workday": 0,
+    "weekend": 2,
+    "daily": [
+        0,
+        1,
+        2,
+        3,
+        2,
+        3,
+        0
+    ]
+};
+
+const setModeChange = (mode) => {
+    schedule.mode = mode;
+    ['fixed', 'workday-weekend', 'daily'].forEach(m => {
+        document.getElementById('set-' + m).style.display = m === mode ? 'block' : 'none';
+    });
+};
+
+const showSet = () => {
+    const days = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
+    ['set-fixed-profile', 'set-workday-profile', 'set-weekend-profile',
+     ...days.map(d => `set-daily-${d}`)].forEach(id => {
+        const sel = document.getElementById(id);
+        sel.innerHTML = '';
+        profiles.forEach((p, i) => sel.add(new Option(p.name, i)));
+    });
+    document.querySelector(`input[name="schedule-mode"][value="${schedule.mode}"]`).checked = true;
+    setModeChange(schedule.mode);
+    document.getElementById('set-fixed-profile').value = schedule.fixed;
+    document.getElementById('set-workday-profile').value = schedule.workday;
+    document.getElementById('set-weekend-profile').value = schedule.weekend;
+    days.forEach((d, i) => document.getElementById(`set-daily-${d}`).value = schedule.daily[i]);
+};
+
 const showProfiles = () => {
     const container = document.getElementById('profiles-container');
     container.innerHTML = '';
@@ -538,7 +600,7 @@ const edit = (profile, index) => {
     currentProfileIndex = index;
     currentProfile = JSON.parse(JSON.stringify(profile));
     editSnapshot = JSON.stringify({name: profile.name, intervals: profile.intervals});
-    showPage('edit');
+    navigatePage('edit');
     showProfile();
     selectRow(currentProfile.intervals.length > 1 ? 1 : 0);
 }
