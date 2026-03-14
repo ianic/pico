@@ -34,7 +34,7 @@ const showPage = (page) => {
     // set page title
     const title = (page) => {
         switch (page) {
-        case "set": return "Pico - Set Profile";
+        case "set": return "Pico - Schedule";
         case "profiles": return "Pico - Profiles";
         case "edit": return "Pico - Edit Profile";
         default: return "Pico";
@@ -521,7 +521,7 @@ const showHome = () => {
 }
 
 let schedule = {
-    "mode": "daily",
+    "mode": "workday-weekend",
     "fixed": 3,
     "workday": 0,
     "weekend": 2,
@@ -536,14 +536,33 @@ let schedule = {
     ]
 };
 
+let scheduleSnapshot = null;
+
+const scheduleIsDirty = () => JSON.stringify(schedule) !== scheduleSnapshot;
+
+const setUpdateDirty = () => {
+    document.getElementById('set-update').disabled = !scheduleIsDirty();
+};
+
+const scheduleBack = () => {
+    Object.assign(schedule, JSON.parse(scheduleSnapshot));
+    navigatePage('home');
+};
+
+const scheduleUpdate = () => {
+    navigatePage('home');
+};
+
 const setModeChange = (mode) => {
     schedule.mode = mode;
     ['fixed', 'workday-weekend', 'daily'].forEach(m => {
         document.getElementById('set-' + m).style.display = m === mode ? 'block' : 'none';
     });
+    setUpdateDirty();
 };
 
 const showSet = () => {
+    scheduleSnapshot = JSON.stringify(schedule);
     const days = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
     ['set-fixed-profile', 'set-workday-profile', 'set-weekend-profile',
      ...days.map(d => `set-daily-${d}`)].forEach(id => {
@@ -557,6 +576,7 @@ const showSet = () => {
     document.getElementById('set-workday-profile').value = schedule.workday;
     document.getElementById('set-weekend-profile').value = schedule.weekend;
     days.forEach((d, i) => document.getElementById(`set-daily-${d}`).value = schedule.daily[i]);
+    document.getElementById('set-update').disabled = true;
 };
 
 const showProfiles = () => {
@@ -605,4 +625,4 @@ const edit = (profile, index) => {
     selectRow(currentProfile.intervals.length > 1 ? 1 : 0);
 }
 
-edit(profiles[3], 3);
+//edit(profiles[3], 3);
