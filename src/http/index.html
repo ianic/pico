@@ -28,10 +28,13 @@
     <body>
         <nav class="navbar navbar-expand-lg bg-body-tertiary mb-4">
             <div class="container-fluid">
-                <a class="navbar-brand" href="#" onclick="navigatePage('home'); return false;"> 
+                <a class="navbar-brand" href="#" onclick="navigatePage('home'); return false;">
                     <img src="thermoemeter.png" alt="Logo" width="32" height="32" class="d-inline-block align-text-top">
                 </a>
-                
+                <nav aria-label="breadcrumb" class="me-auto ms-2 d-lg-none">
+                    <ol class="breadcrumb mb-0" id="breadcrumb"></ol>
+                </nav>
+
                 <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNavAltMarkup" aria-controls="navbarNavAltMarkup" aria-expanded="false" aria-label="Toggle navigation">
                     <span class="navbar-toggler-icon"></span>
                 </button>
@@ -76,61 +79,66 @@
             <div id="set-fixed" class="schedule-panel">
                 <div class="input-group mb-3">
                     <span class="input-group-text" style="min-width:110px">Profile</span>
-                    <select class="form-select" id="set-fixed-profile" onchange="schedule.fixed = parseInt(this.value); setUpdateDirty()"></select>
+                    <select class="form-select" id="set-fixed-profile" onchange="scheduleDraft.fixed = parseInt(this.value); setUpdateDirty()"></select>
                 </div>
             </div>
 
             <div id="set-workday-weekend" class="schedule-panel" style="display:none">
                 <div class="input-group mb-3">
                     <span class="input-group-text" style="min-width:110px">Workday</span>
-                    <select class="form-select" id="set-workday-profile" onchange="schedule.workday = parseInt(this.value); setUpdateDirty()"></select>
+                    <select class="form-select" id="set-workday-profile" onchange="scheduleDraft.workday = parseInt(this.value); setUpdateDirty()"></select>
                 </div>
                 <div class="input-group mb-3">
                     <span class="input-group-text" style="min-width:110px">Weekend</span>
-                    <select class="form-select" id="set-weekend-profile" onchange="schedule.weekend = parseInt(this.value); setUpdateDirty()"></select>
+                    <select class="form-select" id="set-weekend-profile" onchange="scheduleDraft.weekend = parseInt(this.value); setUpdateDirty()"></select>
                 </div>
             </div>
 
             <div id="set-daily" class="schedule-panel" style="display:none">
                 <div class="input-group mb-3">
                     <span class="input-group-text" style="min-width:110px">Monday</span>
-                    <select class="form-select" id="set-daily-mon" onchange="schedule.daily[0] = parseInt(this.value); setUpdateDirty()"></select>
+                    <select class="form-select" id="set-daily-mon" onchange="scheduleDraft.daily[0] = parseInt(this.value); setUpdateDirty()"></select>
                 </div>
                 <div class="input-group mb-3">
                     <span class="input-group-text" style="min-width:110px">Tuesday</span>
-                    <select class="form-select" id="set-daily-tue" onchange="schedule.daily[1] = parseInt(this.value); setUpdateDirty()"></select>
+                    <select class="form-select" id="set-daily-tue" onchange="scheduleDraft.daily[1] = parseInt(this.value); setUpdateDirty()"></select>
                 </div>
                 <div class="input-group mb-3">
                     <span class="input-group-text" style="min-width:110px">Wednesday</span>
-                    <select class="form-select" id="set-daily-wed" onchange="schedule.daily[2] = parseInt(this.value); setUpdateDirty()"></select>
+                    <select class="form-select" id="set-daily-wed" onchange="scheduleDraft.daily[2] = parseInt(this.value); setUpdateDirty()"></select>
                 </div>
                 <div class="input-group mb-3">
                     <span class="input-group-text" style="min-width:110px">Thursday</span>
-                    <select class="form-select" id="set-daily-thu" onchange="schedule.daily[3] = parseInt(this.value); setUpdateDirty()"></select>
+                    <select class="form-select" id="set-daily-thu" onchange="scheduleDraft.daily[3] = parseInt(this.value); setUpdateDirty()"></select>
                 </div>
                 <div class="input-group mb-3">
                     <span class="input-group-text" style="min-width:110px">Friday</span>
-                    <select class="form-select" id="set-daily-fri" onchange="schedule.daily[4] = parseInt(this.value); setUpdateDirty()"></select>
+                    <select class="form-select" id="set-daily-fri" onchange="scheduleDraft.daily[4] = parseInt(this.value); setUpdateDirty()"></select>
                 </div>
                 <div class="input-group mb-3">
                     <span class="input-group-text" style="min-width:110px">Saturday</span>
-                    <select class="form-select" id="set-daily-sat" onchange="schedule.daily[5] = parseInt(this.value); setUpdateDirty()"></select>
+                    <select class="form-select" id="set-daily-sat" onchange="scheduleDraft.daily[5] = parseInt(this.value); setUpdateDirty()"></select>
                 </div>
                 <div class="input-group mb-3">
                     <span class="input-group-text" style="min-width:110px">Sunday</span>
-                    <select class="form-select" id="set-daily-sun" onchange="schedule.daily[6] = parseInt(this.value); setUpdateDirty()"></select>
+                    <select class="form-select" id="set-daily-sun" onchange="scheduleDraft.daily[6] = parseInt(this.value); setUpdateDirty()"></select>
                 </div>
             </div>
         </div>
+        
         <div id="profiles-container" class="container" style="display:none">
-            profiles
         </div>
         
         <div id="edit-container" class="container" style="display:none">
-            <div class="d-flex justify-content-between mb-3">
+            <div class="d-flex justify-content-between mb-1">
                 <button type="button" class="btn btn-secondary" onclick="editBack()">Back</button>
-                <button type="button" class="btn btn-primary" id="edit-update" onclick="editUpdate()" disabled>Update</button>
+                <div class="d-flex gap-2">
+                    <button type="button" class="btn btn-outline-primary" id="edit-save-as-new" onclick="saveAsNew()" disabled>Save as new</button>
+                    <button type="button" class="btn btn-primary" id="edit-update" onclick="editUpdate()" disabled>Update</button>
+                </div>
             </div>
+            <small class="text-muted d-block text-end" style="font-size:0.75em">Update saves changes to the existing profile.</small>
+            <small class="text-muted d-block mb-3 text-end" style="font-size:0.75em">Save as new creates a copy, enabled when profile name is changed.</small>
             <div class="mb-4">
                 <svg id="chart" width="100%" height="200"></svg>
             </div>
@@ -146,19 +154,19 @@
                     
                 </p>
                 <div class="row mb-2 g-1">
-                    <div class="col-md-4">
+                    <div class="col-md-3">
                         <div class="input-group">
-                            <span class="input-group-text" style="min-width: 65px;">From</span>
+                            <span class="input-group-text" >From</span>
                             <select class="form-select" id="select-from" onchange="selectChange(this)"></select>
                         </div>
                     </div>
-                    <div class="col-md-4">
+                    <div class="col-md-3">
                         <div class="input-group">
-                            <span class="input-group-text" style="min-width: 65px;">To</span>
+                            <span class="input-group-text" >To</span>
                             <select class="form-select" id="select-to" onchange="selectChange(this)"></select>
                         </div>
                     </div>
-                    <div class="col-md-4">
+                    <div class="col-md-6">
                         <div class="input-group">
                             <span class="input-group-text">Temperature</span>
                             <select class="form-select" id="select-temp"></select>                
@@ -171,7 +179,7 @@
                         <button id="add" type="button" class="btn btn-primary" onclick="intervalAdd(this)">Add</button>
                     </div>
                 </div>
-                <small class="text-muted">Click on the graph above or on the tabel below to edit existing interval.</small>
+                <small class="text-muted d-block text-end">Click on the graph above or on the table below to edit existing interval.</small>
             </div>
 
             <div class="border p-2 card mb-2">
@@ -196,9 +204,15 @@
                     </tbody>
                 </table>
             </div>
-                        
+
+            <div class="mt-3">
+                <button type="button" class="btn btn-danger" id="edit-delete" onclick="deleteProfile()">Delete</button>
+                <small class="text-muted d-block mt-1" id="edit-delete-note"></small>
+            </div>
         </div>
         
+
+        <div id="graph-tooltip" style="position:absolute;display:none;background:rgba(0,0,0,0.75);color:white;padding:5px 10px;border-radius:4px;font-size:13px;pointer-events:none;line-height:1.6"></div>
 
         <script src="index.js"></script>
     </body>
